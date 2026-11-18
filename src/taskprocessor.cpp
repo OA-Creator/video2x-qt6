@@ -1,5 +1,6 @@
 #include "taskprocessor.h"
 
+#include <QByteArray>
 #include <QDebug>
 #include <QThread>
 
@@ -18,6 +19,9 @@ void TaskProcessor::on_processVideo()
     // Start a thread to monitor progress while process_video is running
     bool processingFinished = false;
 
+    // Number of parallel processor instances used by libvideo2x
+    qputenv("VIDEO2X_GPU_WORKERS", QByteArray::number(m_taskConfigs.gpuWorkers));
+
     // Create video processor object
     video2x::VideoProcessor videoProcessor = video2x::VideoProcessor(m_taskConfigs.procCfg,
                                                                      m_taskConfigs.encCfg,
@@ -29,10 +33,11 @@ void TaskProcessor::on_processVideo()
     // Start monitoring the progress in another thread
     QThread *progressUpdaterThread = QThread::create([this, &videoProcessor, &processingFinished]() {
         while (!processingFinished) {
+            // Sleep for 100 ms between updates (10 updates/s), also while paused
+            QThread::msleep(100);
+
             if (m_videoProcessor != nullptr
                 && m_videoProcessor->get_state() != video2x::VideoProcessorState::Paused) {
-                // Sleep for 100 ms between updates (10 updates/s)
-                QThread::msleep(100);
 
                 // Ensure that process_video sets total_frames and updates processed_frames
                 if (videoProcessor.get_total_frames() > 0) {

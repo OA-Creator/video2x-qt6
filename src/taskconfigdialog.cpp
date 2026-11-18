@@ -77,6 +77,9 @@ TaskConfigDialog::TaskConfigDialog(QWidget *parent)
     // Add the encoder preset selector
     setupEncoderPresets();
 
+    // Add the selector for the number of parallel GPU jobs
+    setupGpuWorkers();
+
     // Set components default visibility
     ui->interpolatorSelectionGroupBox->setVisible(false);
     ui->frameInterpolationOptionsGroupBox->setVisible(false);
@@ -401,6 +404,22 @@ void TaskConfigDialog::setupEncoderPresets()
             &TaskConfigDialog::applyEncoderPreset);
 }
 
+void TaskConfigDialog::setupGpuWorkers()
+{
+    m_gpuWorkersSpinBox = new QSpinBox(this);
+    m_gpuWorkersSpinBox->setRange(1, 4);
+    m_gpuWorkersSpinBox->setValue(2);
+    m_gpuWorkersSpinBox->setToolTip(
+        tr("Number of frames the graphics card works on at the same time. "
+           "More parallel jobs keep the GPU busier but use more video memory. "
+           "1 processes frames one after another."));
+
+    QHBoxLayout *workersLayout = new QHBoxLayout();
+    workersLayout->addWidget(new QLabel(tr("Parallel GPU jobs"), this));
+    workersLayout->addWidget(m_gpuWorkersSpinBox);
+    ui->verticalLayout_4->addLayout(workersLayout);
+}
+
 void TaskConfigDialog::applyEncoderPreset(int index)
 {
     if (index == ENCODER_PRESET_CUSTOM) {
@@ -496,6 +515,7 @@ std::optional<TaskConfig> TaskConfigDialog::getTaskConfig()
     TaskConfig taskConfig;
 
     taskConfig.vkDeviceIndex = ui->vulkanDeviceSelectionComboBox->currentIndex();
+    taskConfig.gpuWorkers = m_gpuWorkersSpinBox->value();
 
     // Processing mode selection
     video2x::processors::ProcessingMode procMode;
@@ -693,6 +713,7 @@ void TaskConfigDialog::setTaskConfig(const TaskConfig &taskConfig)
 {
     // vkDeviceIndex
     ui->vulkanDeviceSelectionComboBox->setCurrentIndex(taskConfig.vkDeviceIndex);
+    m_gpuWorkersSpinBox->setValue(taskConfig.gpuWorkers);
 
     // Determine ProcessingMode by processor_type
     video2x::processors::ProcessingMode procMode;

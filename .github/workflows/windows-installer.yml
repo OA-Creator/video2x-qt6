@@ -142,4 +142,4 @@ jobs:
             dist/Output/video2x-qt6-windows-amd64-installer.exe `
             dist/video2x-qt6-windows-amd64-portable.zip `
             --title "Video2X Qt6 (OA-Build ${{ github.run_number }})" `
-            --notes "Freie Modellwahl, AMD-Encoder-Voreinstellungen, ncnn $env:NCNN_VERSION, größere Kacheln bei viel VRAM."
+            --notes "Freie Modellwahl, AMD-Encoder-Voreinstellungen, ncnn $env:NCNN_VERSION, größere Kacheln bei viel VRAM, parallele GPU-Aufträge, letzte Bilder werden nicht mehr verschluckt."

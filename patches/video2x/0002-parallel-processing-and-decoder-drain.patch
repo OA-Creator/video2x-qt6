@@ -1,0 +1,564 @@
+diff --git a/include/libvideo2x/libvideo2x.h b/include/libvideo2x/libvideo2x.h
+index 9abb2a8..5ba71ed 100644
+--- a/include/libvideo2x/libvideo2x.h
++++ b/include/libvideo2x/libvideo2x.h
+@@ -3,6 +3,8 @@
+ #include <atomic>
+ #include <cstdint>
+ #include <memory>
++#include <mutex>
++#include <vector>
+ 
+ extern "C" {
+ #include <libavcodec/avcodec.h>
+@@ -56,6 +58,19 @@ class LIBVIDEO2X_API VideoProcessor {
+         std::unique_ptr<processors::Processor>& processor
+     );
+ 
++    [[nodiscard]] int process_frames_parallel(
++        decoder::Decoder& decoder,
++        encoder::Encoder& encoder,
++        std::vector<std::unique_ptr<processors::Processor>>& processors
++    );
++
++    [[nodiscard]] int run_processor(
++        processors::Processor* processor,
++        AVFrame* prev_frame,
++        AVFrame* frame,
++        std::vector<AVFrame*>& out_frames
++    );
++
+     [[nodiscard]] int write_frame(AVFrame* frame, encoder::Encoder& encoder);
+ 
+     [[nodiscard]] inline int write_raw_packet(
+@@ -89,6 +104,9 @@ class LIBVIDEO2X_API VideoProcessor {
+     std::atomic<VideoProcessorState> state_ = VideoProcessorState::Idle;
+     std::atomic<int64_t> frame_idx_ = 0;
+     std::atomic<int64_t> total_frames_ = 0;
++
++    // Serializes writes to the output muxer when frames are processed in parallel
++    std::mutex mux_mutex_;
+ };
+ 
+ }  // namespace video2x
+diff --git a/src/libvideo2x.cpp b/src/libvideo2x.cpp
+index c259ed0..36957f2 100644
+--- a/src/libvideo2x.cpp
++++ b/src/libvideo2x.cpp
+@@ -6,6 +6,14 @@ extern "C" {
+ 
+ #include <spdlog/spdlog.h>
+ 
++#include <algorithm>
++#include <chrono>
++#include <condition_variable>
++#include <cstdlib>
++#include <deque>
++#include <map>
++#include <thread>
++
+ #include "avutils.h"
+ #include "decoder.h"
+ #include "encoder.h"
+@@ -15,6 +23,77 @@ extern "C" {
+ 
+ namespace video2x {
+ 
++namespace {
++
++// A simple blocking queue with a fixed capacity
++template <typename T>
++class BoundedQueue {
++   public:
++    explicit BoundedQueue(size_t capacity) : capacity_(capacity) {}
++
++    // Returns false if the queue has been closed
++    bool push(T item) {
++        std::unique_lock<std::mutex> lock(mutex_);
++        not_full_.wait(lock, [&] { return closed_ || queue_.size() < capacity_; });
++        if (closed_) {
++            return false;
++        }
++        queue_.push_back(std::move(item));
++        not_empty_.notify_one();
++        return true;
++    }
++
++    // Returns false once the queue is closed and drained
++    bool pop(T& item) {
++        std::unique_lock<std::mutex> lock(mutex_);
++        not_empty_.wait(lock, [&] { return closed_ || !queue_.empty(); });
++        if (queue_.empty()) {
++            return false;
++        }
++        item = std::move(queue_.front());
++        queue_.pop_front();
++        not_full_.notify_one();
++        return true;
++    }
++
++    void close() {
++        std::lock_guard<std::mutex> lock(mutex_);
++        closed_ = true;
++        not_empty_.notify_all();
++        not_full_.notify_all();
++    }
++
++   private:
++    size_t capacity_;
++    bool closed_ = false;
++    std::deque<T> queue_;
++    std::mutex mutex_;
++    std::condition_variable not_empty_;
++    std::condition_variable not_full_;
++};
++
++// Number of processor instances that work on frames at the same time.
++// Can be overridden with the VIDEO2X_GPU_WORKERS environment variable (1 disables).
++int get_parallel_worker_count() {
++    int workers = 2;
++    if (const char* env = std::getenv("VIDEO2X_GPU_WORKERS")) {
++        char* end = nullptr;
++        long value = std::strtol(env, &end, 10);
++        if (end != env) {
++            workers = static_cast<int>(std::clamp(value, 1L, 8L));
++        }
++    }
++    return std::clamp(workers, 1, 8);
++}
++
++bool supports_parallel_processing(processors::ProcessorType type) {
++    return type == processors::ProcessorType::RealESRGAN ||
++           type == processors::ProcessorType::RealCUGAN ||
++           type == processors::ProcessorType::RIFE;
++}
++
++}  // namespace
++
+ VideoProcessor::VideoProcessor(
+     const processors::ProcessorConfig proc_cfg,
+     const encoder::EncoderConfig enc_cfg,
+@@ -116,8 +195,34 @@ int VideoProcessor::process(
+         return handle_error(ret, "Failed to initialize filter");
+     }
+ 
++    // Create additional processor instances so that several frames are processed at once
++    std::vector<std::unique_ptr<processors::Processor>> processors;
++    int worker_count = get_parallel_worker_count();
++    if (worker_count > 1 && supports_parallel_processing(proc_cfg_.processor_type)) {
++        processors.push_back(std::move(processor));
++        for (int i = 1; i < worker_count; ++i) {
++            std::unique_ptr<processors::Processor> extra(
++                processors::ProcessorFactory::instance().create_processor(proc_cfg_, vk_device_idx_)
++            );
++            if (extra == nullptr ||
++                extra->init(dec_ctx, encoder.get_encoder_context(), hw_ctx.get()) < 0) {
++                logger()->warn("Could not create processor instance {}, using {}", i + 1, i);
++                break;
++            }
++            processors.push_back(std::move(extra));
++        }
++    }
++
+     // Process frames using the encoder and decoder
+-    ret = process_frames(decoder, encoder, processor);
++    if (processors.size() > 1) {
++        logger()->info("Processing with {} parallel processor instances", processors.size());
++        ret = process_frames_parallel(decoder, encoder, processors);
++    } else {
++        if (!processors.empty()) {
++            processor = std::move(processors.front());
++        }
++        ret = process_frames(decoder, encoder, processor);
++    }
+     if (ret < 0) {
+         return handle_error(ret, "Error processing frames");
+     }
+@@ -198,19 +303,20 @@ int VideoProcessor::process_frames(
+     // Read frames from the input file
+     while (state_.load() != VideoProcessorState::Aborted) {
+         ret = av_read_frame(ifmt_ctx, packet.get());
+-        if (ret < 0) {
+-            if (ret == AVERROR_EOF) {
+-                logger()->debug("Reached end of file");
+-                break;
+-            }
++        bool draining = false;
++        if (ret == AVERROR_EOF) {
++            // Send an empty packet to drain the frames still buffered in the decoder
++            logger()->debug("Reached end of file, draining decoder");
++            draining = true;
++        } else if (ret < 0) {
+             av_strerror(ret, errbuf, sizeof(errbuf));
+             logger()->critical("Error reading packet: {}", errbuf);
+             return ret;
+         }
+ 
+-        if (packet->stream_index == in_vstream_idx) {
++        if (draining || packet->stream_index == in_vstream_idx) {
+             // Send the packet to the decoder for decoding
+-            ret = avcodec_send_packet(dec_ctx, packet.get());
++            ret = avcodec_send_packet(dec_ctx, draining ? nullptr : packet.get());
+             if (ret < 0) {
+                 av_strerror(ret, errbuf, sizeof(errbuf));
+                 logger()->critical("Error sending packet to decoder: {}", errbuf);
+@@ -227,8 +333,9 @@ int VideoProcessor::process_frames(
+ 
+                 // Receive the decoded frame from the decoder
+                 ret = avcodec_receive_frame(dec_ctx, frame.get());
+-                if (ret == AVERROR(EAGAIN)) {
++                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+                     // No more frames from this packet
++                    ret = 0;
+                     break;
+                 } else if (ret < 0) {
+                     av_strerror(ret, errbuf, sizeof(errbuf));
+@@ -274,6 +381,9 @@ int VideoProcessor::process_frames(
+             }
+         }
+         av_packet_unref(packet.get());
++        if (draining) {
++            break;
++        }
+     }
+ 
+     // Flush the processor
+@@ -311,6 +421,338 @@ int VideoProcessor::process_frames(
+     return ret;
+ }
+ 
++// Runs one unit of work on a processor and returns the frames to write, in order.
++// For filters this is the filtered frame. For interpolators this is the interpolated
++// frames between prev_frame and frame, followed by frame itself.
++int VideoProcessor::run_processor(
++    processors::Processor* processor,
++    AVFrame* prev_frame,
++    AVFrame* frame,
++    std::vector<AVFrame*>& out_frames
++) {
++    char errbuf[AV_ERROR_MAX_STRING_SIZE];
++    int ret = 0;
++
++    if (processor->get_processing_mode() == processors::ProcessingMode::Filter) {
++        processors::Filter* filter = static_cast<processors::Filter*>(processor);
++        AVFrame* proc_frame = nullptr;
++        ret = filter->filter(frame, &proc_frame);
++        if (ret < 0 && ret != AVERROR(EAGAIN)) {
++            av_strerror(ret, errbuf, sizeof(errbuf));
++            logger()->critical("Error filtering frame: {}", errbuf);
++            return ret;
++        }
++        if (ret == 0 && proc_frame != nullptr) {
++            out_frames.push_back(proc_frame);
++        }
++        return 0;
++    }
++
++    processors::Interpolator* interpolator = static_cast<processors::Interpolator*>(processor);
++
++    if (prev_frame != nullptr) {
++        // Check if a scene change is detected
++        bool skip_frame = false;
++        if (proc_cfg_.scn_det_thresh < 100.0) {
++            float frame_diff = avutils::get_frame_diff(prev_frame, frame);
++            if (frame_diff > proc_cfg_.scn_det_thresh) {
++                logger()->debug("Scene change detected ({:.2f}%)", frame_diff);
++                skip_frame = true;
++            }
++        }
++
++        float time_step = 1.0f / static_cast<float>(proc_cfg_.frm_rate_mul);
++        float current_time_step = time_step;
++        for (int i = 0; i < proc_cfg_.frm_rate_mul - 1; i++) {
++            AVFrame* proc_frame = nullptr;
++            if (!skip_frame) {
++                ret = interpolator->interpolate(prev_frame, frame, &proc_frame, current_time_step);
++            } else {
++                ret = 0;
++                proc_frame = av_frame_clone(prev_frame);
++            }
++
++            if (ret < 0 && ret != AVERROR(EAGAIN)) {
++                av_strerror(ret, errbuf, sizeof(errbuf));
++                logger()->critical("Error interpolating frame: {}", errbuf);
++                return ret;
++            }
++            if (ret == 0 && proc_frame != nullptr) {
++                out_frames.push_back(proc_frame);
++            }
++            current_time_step += time_step;
++        }
++    }
++
++    // The original frame follows the interpolated frames
++    AVFrame* original = av_frame_clone(frame);
++    if (original == nullptr) {
++        return AVERROR(ENOMEM);
++    }
++    out_frames.push_back(original);
++    return 0;
++}
++
++// Process frames with several processor instances at once.
++// The main thread decodes, worker threads run the processors and a writer thread
++// encodes the results in their original order.
++int VideoProcessor::process_frames_parallel(
++    decoder::Decoder& decoder,
++    encoder::Encoder& encoder,
++    std::vector<std::unique_ptr<processors::Processor>>& processors
++) {
++    char errbuf[AV_ERROR_MAX_STRING_SIZE];
++    int ret = 0;
++
++    AVFormatContext* ifmt_ctx = decoder.get_format_context();
++    AVCodecContext* dec_ctx = decoder.get_codec_context();
++    int in_vstream_idx = decoder.get_video_stream_index();
++    AVFormatContext* ofmt_ctx = encoder.get_format_context();
++    AVCodecContext* enc_ctx = encoder.get_encoder_context();
++    int* stream_map = encoder.get_stream_map();
++    bool interpolate =
++        processors.front()->get_processing_mode() == processors::ProcessingMode::Interpolate;
++
++    // Estimate the total number of frames
++    total_frames_ = avutils::get_video_frame_count(ifmt_ctx, in_vstream_idx);
++    if (total_frames_ <= 0) {
++        logger()->warn("Unable to determine the total number of frames");
++        total_frames_ = 0;
++    } else if (interpolate) {
++        total_frames_.store(total_frames_.load() * proc_cfg_.frm_rate_mul);
++    }
++
++    struct WorkItem {
++        int64_t seq = 0;
++        AVFrame* prev_frame = nullptr;
++        AVFrame* frame = nullptr;
++    };
++
++    const size_t worker_count = processors.size();
++    BoundedQueue<WorkItem> work_queue(worker_count * 2);
++
++    // Results keyed by sequence number, consumed in order by the writer
++    std::mutex results_mutex;
++    std::condition_variable results_cv;
++    std::map<int64_t, std::vector<AVFrame*>> results;
++    size_t workers_running = worker_count;
++    std::atomic<int> error_code = 0;
++
++    auto fail = [&](int code) {
++        int expected = 0;
++        error_code.compare_exchange_strong(expected, code);
++        work_queue.close();
++        std::lock_guard<std::mutex> lock(results_mutex);
++        results_cv.notify_all();
++    };
++
++    auto free_item = [](WorkItem& item) {
++        av_frame_free(&item.prev_frame);
++        av_frame_free(&item.frame);
++    };
++
++    // Worker threads
++    std::vector<std::thread> workers;
++    for (size_t w = 0; w < worker_count; ++w) {
++        workers.emplace_back([&, w] {
++            WorkItem item;
++            while (work_queue.pop(item)) {
++                std::vector<AVFrame*> out_frames;
++                int wret = 0;
++                if (error_code.load() == 0) {
++                    wret = run_processor(
++                        processors[w].get(), item.prev_frame, item.frame, out_frames
++                    );
++                }
++                free_item(item);
++                if (wret < 0) {
++                    for (AVFrame* f : out_frames) {
++                        av_frame_free(&f);
++                    }
++                    fail(wret);
++                    continue;
++                }
++                std::lock_guard<std::mutex> lock(results_mutex);
++                results.emplace(item.seq, std::move(out_frames));
++                results_cv.notify_all();
++            }
++            std::lock_guard<std::mutex> lock(results_mutex);
++            workers_running--;
++            results_cv.notify_all();
++        });
++    }
++
++    // Writer thread
++    std::thread writer([&] {
++        int64_t next_seq = 0;
++        while (true) {
++            std::vector<AVFrame*> out_frames;
++            {
++                std::unique_lock<std::mutex> lock(results_mutex);
++                results_cv.wait(lock, [&] {
++                    return results.count(next_seq) > 0 || workers_running == 0 ||
++                           error_code.load() != 0;
++                });
++                auto it = results.find(next_seq);
++                if (it == results.end()) {
++                    // Either all work is done or an error occurred
++                    break;
++                }
++                out_frames = std::move(it->second);
++                results.erase(it);
++            }
++            next_seq++;
++
++            for (AVFrame* f : out_frames) {
++                int wret = 0;
++                if (error_code.load() == 0) {
++                    std::lock_guard<std::mutex> lock(mux_mutex_);
++                    wret = write_frame(f, encoder);
++                }
++                av_frame_free(&f);
++                if (wret < 0) {
++                    fail(wret);
++                } else {
++                    frame_idx_.fetch_add(1);
++                }
++            }
++        }
++    });
++
++    // Decode frames on this thread
++    std::unique_ptr<AVFrame, decltype(&avutils::av_frame_deleter)> frame(
++        av_frame_alloc(), &avutils::av_frame_deleter
++    );
++    std::unique_ptr<AVPacket, decltype(&avutils::av_packet_deleter)> packet(
++        av_packet_alloc(), &avutils::av_packet_deleter
++    );
++    if (frame == nullptr || packet == nullptr) {
++        fail(AVERROR(ENOMEM));
++    }
++
++    AVFrame* prev_frame = nullptr;
++    int64_t seq = 0;
++    int64_t decoded_idx = 0;
++
++    while (error_code.load() == 0 && state_.load() != VideoProcessorState::Aborted) {
++        ret = av_read_frame(ifmt_ctx, packet.get());
++        bool draining = false;
++        if (ret == AVERROR_EOF) {
++            // Send an empty packet to drain the frames still buffered in the decoder
++            logger()->debug("Reached end of file, draining decoder");
++            draining = true;
++        } else if (ret < 0) {
++            av_strerror(ret, errbuf, sizeof(errbuf));
++            logger()->critical("Error reading packet: {}", errbuf);
++            fail(ret);
++            break;
++        }
++
++        if (draining || packet->stream_index == in_vstream_idx) {
++            ret = avcodec_send_packet(dec_ctx, draining ? nullptr : packet.get());
++            if (ret < 0) {
++                av_strerror(ret, errbuf, sizeof(errbuf));
++                logger()->critical("Error sending packet to decoder: {}", errbuf);
++                fail(ret);
++                break;
++            }
++
++            while (error_code.load() == 0 && state_.load() != VideoProcessorState::Aborted) {
++                if (state_.load() == VideoProcessorState::Paused) {
++                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
++                    continue;
++                }
++
++                ret = avcodec_receive_frame(dec_ctx, frame.get());
++                if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
++                    ret = 0;
++                    break;
++                } else if (ret < 0) {
++                    av_strerror(ret, errbuf, sizeof(errbuf));
++                    logger()->critical("Error decoding video frame: {}", errbuf);
++                    fail(ret);
++                    break;
++                }
++
++                // Calculate this frame's presentation timestamp (PTS)
++                if (enc_cfg_.recalculate_pts) {
++                    int64_t pts_idx = interpolate ? decoded_idx * proc_cfg_.frm_rate_mul
++                                                  : decoded_idx;
++                    frame->pts =
++                        av_rescale_q(pts_idx, av_inv_q(enc_ctx->framerate), enc_ctx->time_base);
++                }
++                decoded_idx++;
++
++                WorkItem item;
++                item.seq = seq++;
++                item.frame = av_frame_clone(frame.get());
++                if (interpolate && prev_frame != nullptr) {
++                    item.prev_frame = av_frame_clone(prev_frame);
++                }
++                if (interpolate) {
++                    av_frame_free(&prev_frame);
++                    prev_frame = av_frame_clone(frame.get());
++                }
++                av_frame_unref(frame.get());
++
++                if (item.frame == nullptr) {
++                    free_item(item);
++                    fail(AVERROR(ENOMEM));
++                    break;
++                }
++                if (!work_queue.push(item)) {
++                    free_item(item);
++                    break;
++                }
++            }
++        } else if ((enc_cfg_.copy_audio_streams || enc_cfg_.copy_subtitle_streams) &&
++                   stream_map[packet->stream_index] >= 0) {
++            std::lock_guard<std::mutex> lock(mux_mutex_);
++            ret = write_raw_packet(packet.get(), ifmt_ctx, ofmt_ctx, stream_map);
++            if (ret < 0) {
++                fail(ret);
++            }
++        }
++        av_packet_unref(packet.get());
++        if (draining) {
++            break;
++        }
++    }
++    av_frame_free(&prev_frame);
++
++    // No more work: let the workers finish and the writer drain the results
++    work_queue.close();
++    for (std::thread& t : workers) {
++        t.join();
++    }
++    {
++        std::lock_guard<std::mutex> lock(results_mutex);
++        results_cv.notify_all();
++    }
++    writer.join();
++
++    // Free any results that were not written because of an error
++    for (auto& [result_seq, out_frames] : results) {
++        for (AVFrame* f : out_frames) {
++            av_frame_free(&f);
++        }
++    }
++
++    if (error_code.load() != 0) {
++        return error_code.load();
++    }
++
++    // Flush the encoder
++    ret = encoder.flush();
++    if (ret < 0) {
++        av_strerror(ret, errbuf, sizeof(errbuf));
++        logger()->critical("Error flushing encoder: {}", errbuf);
++        return ret;
++    }
++
++    return 0;
++}
++
+ int VideoProcessor::write_frame(AVFrame* frame, encoder::Encoder& encoder) {
+     char errbuf[AV_ERROR_MAX_STRING_SIZE];
+     int ret = 0;

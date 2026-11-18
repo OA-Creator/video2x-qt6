@@ -831,6 +831,16 @@ Starten Sie die Anwendung neu, damit die Änderungen wirksam werden.</translatio
         <translation>Voreinstellung</translation>
     </message>
     <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Parallel GPU jobs</source>
+        <translation>Parallele GPU-Aufträge</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Number of frames the graphics card works on at the same time. More parallel jobs keep the GPU busier but use more video memory. 1 processes frames one after another.</source>
+        <translation>Anzahl der Bilder, an denen die Grafikkarte gleichzeitig arbeitet. Mehr parallele Aufträge lasten die GPU besser aus, brauchen aber mehr Grafikspeicher. 1 rechnet die Bilder nacheinander.</translation>
+    </message>
+    <message>
         <location filename="taskconfigdialog.cpp" line="49"/>
         <source>Value</source>
         <translation>Wert</translation>

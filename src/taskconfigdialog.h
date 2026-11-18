@@ -5,6 +5,7 @@
 #include <QDialog>
 #include <QList>
 #include <QMap>
+#include <QSpinBox>
 #include <QStandardItemModel>
 
 #include "taskconfig.h"
@@ -37,12 +38,14 @@ private:
     void populateVulkanDevices();
     void populateRealesrganModels();
     void setupEncoderPresets();
+    void setupGpuWorkers();
     void applyEncoderPreset(int index);
     void addCustomEncoderOption(const QString &option, const QString &value);
 
     // Scaling factors available for each Real-ESRGAN model found in the models directory
     QMap<QString, QList<int>> m_realesrganModelScales;
     QComboBox *m_encoderPresetComboBox = nullptr;
+    QSpinBox *m_gpuWorkersSpinBox = nullptr;
 
     Ui::TaskConfigDialog *ui;
     QStandardItemModel *m_customEncoderOptionsTableModel;
