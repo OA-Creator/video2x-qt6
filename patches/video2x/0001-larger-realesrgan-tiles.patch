@@ -1,0 +1,16 @@
+diff --git a/src/filter_realesrgan.cpp b/src/filter_realesrgan.cpp
+index abfd100..752b6eb 100644
+--- a/src/filter_realesrgan.cpp
++++ b/src/filter_realesrgan.cpp
+@@ -88,7 +88,10 @@ int FilterRealesrgan::init(AVCodecContext* dec_ctx, AVCodecContext* enc_ctx, AVB
+ 
+     // Calculate tilesize based on GPU heap budget
+     uint32_t heap_budget = ncnn::get_gpu_device(gpuid_)->get_heap_budget();
+-    if (heap_budget > 1900) {
++    if (heap_budget > 7000) {
++        // Larger tiles reduce the overlap overhead on GPUs with plenty of VRAM
++        realesrgan_->tilesize = 400;
++    } else if (heap_budget > 1900) {
+         realesrgan_->tilesize = 200;
+     } else if (heap_budget > 550) {
+         realesrgan_->tilesize = 100;

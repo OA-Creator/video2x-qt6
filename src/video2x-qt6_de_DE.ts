@@ -796,6 +796,41 @@ Starten Sie die Anwendung neu, damit die Änderungen wirksam werden.</translatio
         <translation>Option</translation>
     </message>
     <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Custom</source>
+        <translation>Benutzerdefiniert</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Default (libx264, CPU)</source>
+        <translation>Standard (libx264, CPU)</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>AMD AV1 (GPU)</source>
+        <translation>AMD AV1 (Grafikkarte)</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>AMD HEVC (GPU)</source>
+        <translation>AMD HEVC (Grafikkarte)</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>AMD H.264 (GPU)</source>
+        <translation>AMD H.264 (Grafikkarte)</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Fills in the codec, bit rate and custom options for a common encoder setup. The AMD presets encode on the graphics card (AMF).</source>
+        <translation>Trägt Codec, Bitrate und benutzerdefinierte Optionen für eine gängige Encoder-Einstellung ein. Die AMD-Voreinstellungen kodieren auf der Grafikkarte (AMF).</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Preset</source>
+        <translation>Voreinstellung</translation>
+    </message>
+    <message>
         <location filename="taskconfigdialog.cpp" line="49"/>
         <source>Value</source>
         <translation>Wert</translation>

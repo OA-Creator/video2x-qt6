@@ -1,8 +1,16 @@
 #include "taskconfigdialog.h"
 #include "ui_taskconfigdialog.h"
 
+#include <algorithm>
+
+#include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QFileDialog>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QMessageBox>
+#include <QRegularExpression>
 #include <QPushButton>
 #include <QTimer>
 
@@ -32,6 +40,15 @@ extern "C" {
 #define REALESRGAN_MODEL_REALESRGAN_PLUS_ANIME 1
 #define REALESRGAN_MODEL_REALESR_ANIMEVIDEOV3 2
 #define REALESRGAN_MODEL_REALESR_GENERALV3 3
+// Indices above this belong to additional models found in the models directory
+#define REALESRGAN_MODEL_LAST_BUILTIN REALESRGAN_MODEL_REALESR_GENERALV3
+
+// Encoder presets
+#define ENCODER_PRESET_CUSTOM 0
+#define ENCODER_PRESET_LIBX264 1
+#define ENCODER_PRESET_AMD_AV1 2
+#define ENCODER_PRESET_AMD_HEVC 3
+#define ENCODER_PRESET_AMD_H264 4
 
 // Real-CUGAN models
 #define REALCUGAN_MODEL_NOSE 0
@@ -50,15 +67,15 @@ TaskConfigDialog::TaskConfigDialog(QWidget *parent)
                                                                 << tr("Option") << tr("Value"));
     ui->customEncoderOptionsTableView->setModel(m_customEncoderOptionsTableModel);
 
-    // Add preset custom option crf=20
-    QStandardItem *optionItem = new QStandardItem("crf");
-    QStandardItem *valueItem = new QStandardItem("20");
-    m_customEncoderOptionsTableModel->appendRow(QList<QStandardItem *>() << optionItem << valueItem);
+    // Add preset custom options crf=20 and preset=slow
+    addCustomEncoderOption("crf", "20");
+    addCustomEncoderOption("preset", "slow");
 
-    // Add preset custom option preset=slow
-    optionItem = new QStandardItem("preset");
-    valueItem = new QStandardItem("slow");
-    m_customEncoderOptionsTableModel->appendRow(QList<QStandardItem *>() << optionItem << valueItem);
+    // Add additional Real-ESRGAN models found in the models directory
+    populateRealesrganModels();
+
+    // Add the encoder preset selector
+    setupEncoderPresets();
 
     // Set components default visibility
     ui->interpolatorSelectionGroupBox->setVisible(false);
@@ -239,14 +256,27 @@ void TaskConfigDialog::execErrorMessage(const QString &message)
 void TaskConfigDialog::updateScalingFactorAndNoiseLevelRange()
 {
     if (ui->filterSelectionComboBox->currentIndex() == ESRGAN_MODE) {
-        // For Real-ESRGAN, the maximum scaling factor is 4
-        ui->scalingFactorSpinBox->setMaximum(4);
+        const QList<int> modelScales = m_realesrganModelScales.value(
+            ui->realesrganModelComboBox->currentText());
 
-        // Set minimum scaling factor for Real-ESRGAN
-        if (ui->realesrganModelComboBox->currentIndex() == REALESRGAN_MODEL_REALESR_ANIMEVIDEOV3) {
-            ui->scalingFactorSpinBox->setMinimum(2);
+        if (ui->realesrganModelComboBox->currentIndex() > REALESRGAN_MODEL_LAST_BUILTIN
+            && !modelScales.isEmpty()) {
+            // Additional models: allow the scaling factors that exist as model files
+            ui->scalingFactorSpinBox->setRange(*std::min_element(modelScales.begin(),
+                                                                 modelScales.end()),
+                                               *std::max_element(modelScales.begin(),
+                                                                 modelScales.end()));
         } else {
-            ui->scalingFactorSpinBox->setMinimum(4);
+            // For Real-ESRGAN, the maximum scaling factor is 4
+            ui->scalingFactorSpinBox->setMaximum(4);
+
+            // Set minimum scaling factor for Real-ESRGAN
+            if (ui->realesrganModelComboBox->currentIndex()
+                == REALESRGAN_MODEL_REALESR_ANIMEVIDEOV3) {
+                ui->scalingFactorSpinBox->setMinimum(2);
+            } else {
+                ui->scalingFactorSpinBox->setMinimum(4);
+            }
         }
 
         if (ui->realesrganModelComboBox->currentIndex() == REALESRGAN_MODEL_REALESR_ANIMEVIDEOV3) {
@@ -292,6 +322,117 @@ void TaskConfigDialog::updateScalingFactorAndNoiseLevelRange()
     if (ui->noiseLevelSpinBox->value() > ui->noiseLevelSpinBox->maximum()
         || ui->noiseLevelSpinBox->value() < ui->noiseLevelSpinBox->minimum()) {
         ui->noiseLevelSpinBox->setValue(0);
+    }
+}
+
+void TaskConfigDialog::addCustomEncoderOption(const QString &option, const QString &value)
+{
+    m_customEncoderOptionsTableModel->appendRow(QList<QStandardItem *>()
+                                                << new QStandardItem(option)
+                                                << new QStandardItem(value));
+}
+
+void TaskConfigDialog::populateRealesrganModels()
+{
+    // Model files are named <model>-x<scale>.param / <model>-x<scale>.bin
+    QDir modelsDir(QCoreApplication::applicationDirPath() + "/models/realesrgan");
+    if (!modelsDir.exists()) {
+        return;
+    }
+
+    static const QRegularExpression modelFileRegex("^(.+)-x(\\d+)\\.param$");
+    const QStringList paramFiles = modelsDir.entryList(QStringList() << "*.param",
+                                                       QDir::Files,
+                                                       QDir::Name);
+    for (const QString &paramFile : paramFiles) {
+        QRegularExpressionMatch match = modelFileRegex.match(paramFile);
+        if (!match.hasMatch()) {
+            continue;
+        }
+
+        QString modelName = match.captured(1);
+        int scale = match.captured(2).toInt();
+
+        // The -wdn variant is selected automatically through the noise level
+        if (modelName.endsWith("-wdn")) {
+            continue;
+        }
+
+        // Both the .param and the .bin file are required
+        QString binFile = modelName + "-x" + QString::number(scale) + ".bin";
+        if (!QFile::exists(modelsDir.filePath(binFile))) {
+            continue;
+        }
+
+        if (!m_realesrganModelScales[modelName].contains(scale)) {
+            m_realesrganModelScales[modelName].append(scale);
+        }
+    }
+
+    // Append the models that are not already part of the built-in list
+    for (auto it = m_realesrganModelScales.constBegin(); it != m_realesrganModelScales.constEnd();
+         ++it) {
+        if (ui->realesrganModelComboBox->findText(it.key()) < 0) {
+            ui->realesrganModelComboBox->addItem(it.key());
+        }
+    }
+}
+
+void TaskConfigDialog::setupEncoderPresets()
+{
+    m_encoderPresetComboBox = new QComboBox(this);
+    m_encoderPresetComboBox->addItem(tr("Custom"));
+    m_encoderPresetComboBox->addItem(tr("Default (libx264, CPU)"));
+    m_encoderPresetComboBox->addItem(tr("AMD AV1 (GPU)"));
+    m_encoderPresetComboBox->addItem(tr("AMD HEVC (GPU)"));
+    m_encoderPresetComboBox->addItem(tr("AMD H.264 (GPU)"));
+    m_encoderPresetComboBox->setToolTip(
+        tr("Fills in the codec, bit rate and custom options for a common encoder setup. "
+           "The AMD presets encode on the graphics card (AMF)."));
+
+    QHBoxLayout *presetLayout = new QHBoxLayout();
+    presetLayout->addWidget(new QLabel(tr("Preset"), this));
+    presetLayout->addWidget(m_encoderPresetComboBox);
+    ui->verticalLayout_14->insertLayout(0, presetLayout);
+
+    connect(m_encoderPresetComboBox,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            &TaskConfigDialog::applyEncoderPreset);
+}
+
+void TaskConfigDialog::applyEncoderPreset(int index)
+{
+    if (index == ENCODER_PRESET_CUSTOM) {
+        return;
+    }
+
+    m_customEncoderOptionsTableModel->removeRows(0, m_customEncoderOptionsTableModel->rowCount());
+
+    switch (index) {
+    case ENCODER_PRESET_LIBX264:
+        ui->codecLineEdit->setText("libx264");
+        ui->bitRateSpinBox->setValue(0);
+        addCustomEncoderOption("crf", "20");
+        addCustomEncoderOption("preset", "slow");
+        break;
+    case ENCODER_PRESET_AMD_AV1:
+        ui->codecLineEdit->setText("av1_amf");
+        ui->bitRateSpinBox->setValue(25000000);
+        addCustomEncoderOption("quality", "quality");
+        break;
+    case ENCODER_PRESET_AMD_HEVC:
+        ui->codecLineEdit->setText("hevc_amf");
+        ui->bitRateSpinBox->setValue(25000000);
+        addCustomEncoderOption("quality", "quality");
+        break;
+    case ENCODER_PRESET_AMD_H264:
+        ui->codecLineEdit->setText("h264_amf");
+        ui->bitRateSpinBox->setValue(25000000);
+        addCustomEncoderOption("quality", "quality");
+        break;
+    default:
+        break;
     }
 }
 
@@ -475,7 +616,8 @@ std::optional<TaskConfig> TaskConfigDialog::getTaskConfig()
 
     // EncoderConfig
     taskConfig.outputSuffix = ui->suffixLineEdit->text();
-    taskConfig.encCfg.copy_streams = ui->copyStreamsCheckBox->isChecked();
+    taskConfig.encCfg.copy_audio_streams = ui->copyStreamsCheckBox->isChecked();
+    taskConfig.encCfg.copy_subtitle_streams = ui->copyStreamsCheckBox->isChecked();
 
     // Rate control and compression
     taskConfig.encCfg.bit_rate = ui->bitRateSpinBox->value();
@@ -681,7 +823,8 @@ void TaskConfigDialog::setTaskConfig(const TaskConfig &taskConfig)
     ui->suffixLineEdit->setText(taskConfig.outputSuffix);
 
     // copy_streams
-    ui->copyStreamsCheckBox->setChecked(taskConfig.encCfg.copy_streams);
+    ui->copyStreamsCheckBox->setChecked(taskConfig.encCfg.copy_audio_streams
+                                        || taskConfig.encCfg.copy_subtitle_streams);
 
     // frameRateMultiplier (only relevant if Interpolate)
     if (procMode == video2x::processors::ProcessingMode::Interpolate) {

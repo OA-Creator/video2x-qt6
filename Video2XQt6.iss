@@ -1,6 +1,6 @@
 [Setup]
 AppName=Video2X Qt6
-AppVersion=6.4.0
+AppVersion=6.4.0-OA
 AppId={{07D36A37-9C89-4ECD-9866-621351EB0886}
 ArchitecturesInstallIn64BitMode=x64compatible
 DefaultDirName={commonpf}\Video2X Qt6
@@ -13,6 +13,7 @@ UninstallDisplayIcon={app}\video2x-qt6.exe
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+Name: "german"; MessagesFile: "compiler:Languages\German.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &Desktop shortcut"; GroupDescription: "Additional icons:"

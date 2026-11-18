@@ -1,0 +1,142 @@
+name: Windows-Installer bauen
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FFMPEG_VERSION: "7.1"
+  NCNN_VERSION: "20261020"
+  QT_VERSION: "6.8.3"
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Submodule holen
+        shell: pwsh
+        run: |
+          git submodule update --init --depth 1 third_party/spdlog third_party/video2x
+          git -C third_party/video2x submodule update --init --depth 1 `
+            third_party/librealesrgan_ncnn_vulkan `
+            third_party/librealcugan_ncnn_vulkan `
+            third_party/librife_ncnn_vulkan `
+            third_party/spdlog
+
+      - name: Patches auf libvideo2x anwenden
+        shell: pwsh
+        run: |
+          Get-ChildItem patches/video2x/*.patch | Sort-Object Name | ForEach-Object {
+            git -C third_party/video2x apply --verbose $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Patch fehlgeschlagen: $($_.Name)" }
+          }
+
+      - name: Vulkan SDK installieren
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.3.204.0
+          vulkan-components: Vulkan-Headers, Vulkan-Loader, Glslang, SPIRV-Tools, SPIRV-Headers
+          vulkan-use-cache: false
+
+      - name: Qt installieren
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: FFmpeg und ncnn herunterladen
+        shell: pwsh
+        run: |
+          curl.exe -fsSL -o ffmpeg.zip "https://github.com/GyanD/codexffmpeg/releases/download/$env:FFMPEG_VERSION/ffmpeg-$env:FFMPEG_VERSION-full_build-shared.zip"
+          Expand-Archive ffmpeg.zip -DestinationPath dl
+          $ffmpegDir = "dl/ffmpeg-$env:FFMPEG_VERSION-full_build-shared"
+          Copy-Item -Recurse $ffmpegDir third_party/video2x/third_party/ffmpeg-shared
+          Copy-Item -Recurse $ffmpegDir third_party/ffmpeg-shared
+
+          curl.exe -fsSL -o ncnn.zip "https://github.com/Tencent/ncnn/releases/download/$env:NCNN_VERSION/ncnn-$env:NCNN_VERSION-windows-vs2022-shared.zip"
+          Expand-Archive ncnn.zip -DestinationPath dl
+          Copy-Item -Recurse "dl/ncnn-$env:NCNN_VERSION-windows-vs2022-shared" third_party/video2x/third_party/ncnn-shared
+
+      - name: libvideo2x bauen
+        shell: pwsh
+        run: |
+          $install = Join-Path $pwd "third_party/video2x-install"
+          cmake -S third_party/video2x -B build-v2x `
+            -DVIDEO2X_BUILD_CLI=OFF `
+            -DVIDEO2X_USE_EXTERNAL_NCNN=OFF `
+            -DVIDEO2X_USE_EXTERNAL_SPDLOG=OFF `
+            -DVIDEO2X_USE_EXTERNAL_BOOST=OFF `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX="$install" `
+            -DCMAKE_INSTALL_BINDIR=. `
+            -DCMAKE_INSTALL_LIBDIR=. `
+            -DCMAKE_INSTALL_DATADIR=.
+          if ($LASTEXITCODE -ne 0) { throw "CMake-Konfiguration libvideo2x fehlgeschlagen" }
+          cmake --build build-v2x --config Release --parallel --target install
+          if ($LASTEXITCODE -ne 0) { throw "Build libvideo2x fehlgeschlagen" }
+
+      - name: Video2X Qt6 bauen
+        shell: pwsh
+        run: |
+          $dist = Join-Path $pwd "dist/video2x-qt6"
+          cmake -S . -B build-gui `
+            -DUSE_EXTERNAL_SPDLOG=OFF `
+            -DUSE_SHARED_VIDEO2X=ON `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX="$dist" `
+            -DCMAKE_INSTALL_BINDIR=.
+          if ($LASTEXITCODE -ne 0) { throw "CMake-Konfiguration GUI fehlgeschlagen" }
+          cmake --build build-gui --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { throw "Build GUI fehlgeschlagen" }
+          cmake --install build-gui --config Release
+          if ($LASTEXITCODE -ne 0) { throw "Installation GUI fehlgeschlagen" }
+
+      - name: Programmordner zusammenstellen
+        shell: pwsh
+        run: |
+          $src = "third_party/video2x-install"
+          $dist = "dist/video2x-qt6"
+          Copy-Item "$src/*.dll" $dist
+          Copy-Item -Recurse -Force "$src/models" $dist
+          Get-ChildItem -Recurse $dist | Select-Object -ExpandProperty FullName
+
+      - name: Installer bauen
+        shell: pwsh
+        run: |
+          curl.exe -fsSL -o dist/VC_redist.x64.exe "https://aka.ms/vs/17/release/vc_redist.x64.exe"
+          Copy-Item Video2XQt6.iss dist/
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc dist/Video2XQt6.iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup fehlgeschlagen" }
+          Compress-Archive -Path dist/video2x-qt6/* -DestinationPath dist/video2x-qt6-windows-amd64-portable.zip
+
+      - name: Artefakte hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: video2x-qt6-windows-amd64
+          path: |
+            dist/Output/video2x-qt6-windows-amd64-installer.exe
+            dist/video2x-qt6-windows-amd64-portable.zip
+
+      - name: Release veröffentlichen
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "build-${{ github.run_number }}"
+          gh release create $tag `
+            dist/Output/video2x-qt6-windows-amd64-installer.exe `
+            dist/video2x-qt6-windows-amd64-portable.zip `
+            --title "Video2X Qt6 (OA-Build ${{ github.run_number }})" `
+            --notes "Freie Modellwahl, AMD-Encoder-Voreinstellungen, ncnn $env:NCNN_VERSION, größere Kacheln bei viel VRAM."

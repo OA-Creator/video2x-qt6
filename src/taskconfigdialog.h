@@ -1,7 +1,10 @@
 #ifndef TASKCONFIGDIALOG_H
 #define TASKCONFIGDIALOG_H
 
+#include <QComboBox>
 #include <QDialog>
+#include <QList>
+#include <QMap>
 #include <QStandardItemModel>
 
 #include "taskconfig.h"
@@ -32,6 +35,14 @@ private slots:
 
 private:
     void populateVulkanDevices();
+    void populateRealesrganModels();
+    void setupEncoderPresets();
+    void applyEncoderPreset(int index);
+    void addCustomEncoderOption(const QString &option, const QString &value);
+
+    // Scaling factors available for each Real-ESRGAN model found in the models directory
+    QMap<QString, QList<int>> m_realesrganModelScales;
+    QComboBox *m_encoderPresetComboBox = nullptr;
 
     Ui::TaskConfigDialog *ui;
     QStandardItemModel *m_customEncoderOptionsTableModel;
