@@ -79,12 +79,13 @@ if(WIN32)
     list(APPEND VIDEO2X_QT6_LIBS
         ${FFMPEG_BASE_PATH}/lib/avutil.lib
         ${FFMPEG_BASE_PATH}/lib/avcodec.lib
+        ${FFMPEG_BASE_PATH}/lib/avformat.lib
     )
     list(APPEND VIDEO2X_QT6_INCLUDE_DIRS ${FFMPEG_BASE_PATH}/include)
 else()
     # Find the required packages using pkg-config
     find_package(PkgConfig REQUIRED)
-    set(REQUIRED_PKGS libavutil libavcodec)
+    set(REQUIRED_PKGS libavutil libavcodec libavformat)
 
     # Loop through each package to find and collect include dirs and libraries
     foreach(PKG ${REQUIRED_PKGS})

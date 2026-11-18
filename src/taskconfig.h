@@ -15,7 +15,7 @@ struct TaskConfig
     bool benchmark = false;
 
     // Number of processor instances working on frames at the same time
-    int gpuWorkers = 2;
+    int gpuWorkers = 3;
 
     // VideoProcessor::process parameters
     std::filesystem::path inFname;

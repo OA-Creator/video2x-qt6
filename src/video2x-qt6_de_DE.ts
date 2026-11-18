@@ -837,6 +837,66 @@ Starten Sie die Anwendung neu, damit die Änderungen wirksam werden.</translatio
     </message>
     <message>
         <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>No limit</source>
+        <translation>Keine Begrenzung</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Full HD (1920 × 1080)</source>
+        <translation>Full HD (1920 × 1080)</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>QHD (2560 × 1440)</source>
+        <translation>QHD (2560 × 1440)</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>4K UHD (3840 × 2160)</source>
+        <translation>4K UHD (3840 × 2160)</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Results larger than this are scaled down after upscaling, keeping the aspect ratio. Portrait videos are handled automatically.</source>
+        <translation>Ist das Ergebnis größer, wird es nach dem Hochskalieren verkleinert. Das Seitenverhältnis bleibt erhalten, Hochkant-Videos werden automatisch berücksichtigt.</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Maximum resolution</source>
+        <translation>Maximale Auflösung</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Result: at most &lt;b&gt;%1&lt;/b&gt;</source>
+        <translation>Ergebnis: höchstens &lt;b&gt;%1&lt;/b&gt;</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Result: &lt;b&gt;%1&lt;/b&gt;</source>
+        <translation>Ergebnis: &lt;b&gt;%1&lt;/b&gt;</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Result: &lt;b&gt;%1 × the original size&lt;/b&gt;</source>
+        <translation>Ergebnis: &lt;b&gt;%1-fache Originalgröße&lt;/b&gt;</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>(+%1 more)</source>
+        <translation>(+%1 weitere)</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Upscaled to %1, then scaled down to the maximum resolution.</source>
+        <translation>Die KI rechnet auf %1, danach wird auf die maximale Auflösung verkleinert.</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>The video already has this resolution or more. Upscaling brings no benefit here.</source>
+        <translation>Das Video hat diese Auflösung schon oder mehr. Hochskalieren bringt hier nichts.</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
         <source>Number of frames the graphics card works on at the same time. More parallel jobs keep the GPU busier but use more video memory. 1 processes frames one after another.</source>
         <translation>Anzahl der Bilder, an denen die Grafikkarte gleichzeitig arbeitet. Mehr parallele Aufträge lasten die GPU besser aus, brauchen aber mehr Grafikspeicher. 1 rechnet die Bilder nacheinander.</translation>
     </message>

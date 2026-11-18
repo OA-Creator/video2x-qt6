@@ -1,3 +1,21 @@
+diff --git a/include/libvideo2x/conversions.h b/include/libvideo2x/conversions.h
+index bb9423c..a21af62 100644
+--- a/include/libvideo2x/conversions.h
++++ b/include/libvideo2x/conversions.h
+@@ -13,6 +13,13 @@ namespace conversions {
+ // Convert AVFrame to another pixel format
+ AVFrame* convert_avframe_pix_fmt(AVFrame* src_frame, AVPixelFormat pix_fmt);
+ 
++// Scale an AVFrame to the given size and pixel format with a high quality filter
++AVFrame* scale_avframe(AVFrame* src_frame, int width, int height, AVPixelFormat pix_fmt);
++
++// Fit width x height into max_width x max_height, keeping the aspect ratio.
++// The box is turned for portrait sizes. Returns even dimensions.
++void fit_dimensions(int& width, int& height, int max_width, int max_height);
++
+ // Convert AVFrame to ncnn::Mat
+ ncnn::Mat avframe_to_ncnn_mat(AVFrame* frame);
+ 
 diff --git a/include/libvideo2x/libvideo2x.h b/include/libvideo2x/libvideo2x.h
 index 9abb2a8..5ba71ed 100644
 --- a/include/libvideo2x/libvideo2x.h
@@ -41,11 +59,151 @@ index 9abb2a8..5ba71ed 100644
  };
  
  }  // namespace video2x
+diff --git a/include/libvideo2x/processor.h b/include/libvideo2x/processor.h
+index f60b552..ee76397 100644
+--- a/include/libvideo2x/processor.h
++++ b/include/libvideo2x/processor.h
+@@ -60,6 +60,9 @@ struct ProcessorConfig {
+     int noise_level = -1;
+     int frm_rate_mul = 0;
+     float scn_det_thresh = 0.0f;
++    // Largest output size (0 = no limit). The box is turned for portrait videos.
++    int max_width = 0;
++    int max_height = 0;
+     std::variant<LibplaceboConfig, RealESRGANConfig, RealCUGANConfig, RIFEConfig> config;
+ };
+ 
+diff --git a/src/conversions.cpp b/src/conversions.cpp
+index dd508af..8870460 100644
+--- a/src/conversions.cpp
++++ b/src/conversions.cpp
+@@ -1,5 +1,7 @@
+ #include "conversions.h"
+ 
++#include <algorithm>
++#include <cmath>
+ #include <cstddef>
+ #include <cstdio>
+ 
+@@ -67,6 +69,76 @@ AVFrame* convert_avframe_pix_fmt(AVFrame* src_frame, AVPixelFormat pix_fmt) {
+     return dst_frame;
+ }
+ 
++AVFrame* scale_avframe(AVFrame* src_frame, int width, int height, AVPixelFormat pix_fmt) {
++    AVFrame* dst_frame = av_frame_alloc();
++    if (dst_frame == nullptr) {
++        logger()->error("Failed to allocate destination AVFrame.");
++        return nullptr;
++    }
++
++    dst_frame->format = pix_fmt;
++    dst_frame->width = width;
++    dst_frame->height = height;
++    if (av_frame_get_buffer(dst_frame, 32) < 0) {
++        logger()->error("Failed to allocate memory for AVFrame.");
++        av_frame_free(&dst_frame);
++        return nullptr;
++    }
++    av_frame_copy_props(dst_frame, src_frame);
++
++    // Each thread keeps its own context, it is only rebuilt when the sizes change
++    thread_local SwsContext* sws_ctx = nullptr;
++    sws_ctx = sws_getCachedContext(
++        sws_ctx,
++        src_frame->width,
++        src_frame->height,
++        static_cast<AVPixelFormat>(src_frame->format),
++        width,
++        height,
++        pix_fmt,
++        SWS_LANCZOS | SWS_ACCURATE_RND | SWS_FULL_CHR_H_INT,
++        nullptr,
++        nullptr,
++        nullptr
++    );
++    if (sws_ctx == nullptr) {
++        logger()->error("Failed to initialize swscale context.");
++        av_frame_free(&dst_frame);
++        return nullptr;
++    }
++
++    sws_scale(
++        sws_ctx,
++        src_frame->data,
++        src_frame->linesize,
++        0,
++        src_frame->height,
++        dst_frame->data,
++        dst_frame->linesize
++    );
++    return dst_frame;
++}
++
++void fit_dimensions(int& width, int& height, int max_width, int max_height) {
++    if (max_width <= 0 || max_height <= 0 || width <= 0 || height <= 0) {
++        return;
++    }
++
++    // Turn the box for portrait videos
++    if ((height > width) != (max_height > max_width)) {
++        std::swap(max_width, max_height);
++    }
++    if (width <= max_width && height <= max_height) {
++        return;
++    }
++
++    double factor = std::min(
++        static_cast<double>(max_width) / width, static_cast<double>(max_height) / height
++    );
++    width = std::max(2, static_cast<int>(std::floor(width * factor / 2.0)) * 2);
++    height = std::max(2, static_cast<int>(std::floor(height * factor / 2.0)) * 2);
++}
++
+ // Convert AVFrame to ncnn::Mat by copying the data
+ [[gnu::target_clones("arch=x86-64-v4", "arch=x86-64-v3", "default")]]
+ ncnn::Mat avframe_to_ncnn_mat(AVFrame* frame) {
+diff --git a/src/encoder.cpp b/src/encoder.cpp
+index cb735d5..9e442f5 100644
+--- a/src/encoder.cpp
++++ b/src/encoder.cpp
+@@ -1,5 +1,7 @@
+ #include "encoder.h"
+ 
++#include <cstring>
++
+ #include <spdlog/spdlog.h>
+ 
+ extern "C" {
+@@ -184,6 +186,24 @@ int Encoder::init(
+         return ret;
+     }
+ 
++    // Keep the rotation of the input video (e.g. portrait videos recorded with a phone)
++    const AVCodecParameters* in_par = ifmt_ctx->streams[in_vstream_idx]->codecpar;
++    const AVPacketSideData* in_rotation = av_packet_side_data_get(
++        in_par->coded_side_data, in_par->nb_coded_side_data, AV_PKT_DATA_DISPLAYMATRIX
++    );
++    if (in_rotation != nullptr) {
++        AVPacketSideData* out_rotation = av_packet_side_data_new(
++            &out_vstream->codecpar->coded_side_data,
++            &out_vstream->codecpar->nb_coded_side_data,
++            AV_PKT_DATA_DISPLAYMATRIX,
++            in_rotation->size,
++            0
++        );
++        if (out_rotation != nullptr) {
++            memcpy(out_rotation->data, in_rotation->data, in_rotation->size);
++        }
++    }
++
+     // Copy time base and frame rate from the encoder context
+     out_vstream->time_base = enc_ctx_->time_base;
+     out_vstream->avg_frame_rate = enc_ctx_->framerate;
 diff --git a/src/libvideo2x.cpp b/src/libvideo2x.cpp
-index c259ed0..36957f2 100644
+index c259ed0..5654c71 100644
 --- a/src/libvideo2x.cpp
 +++ b/src/libvideo2x.cpp
-@@ -6,6 +6,14 @@ extern "C" {
+@@ -6,7 +6,16 @@ extern "C" {
  
  #include <spdlog/spdlog.h>
  
@@ -58,9 +216,11 @@ index c259ed0..36957f2 100644
 +#include <thread>
 +
  #include "avutils.h"
++#include "conversions.h"
  #include "decoder.h"
  #include "encoder.h"
-@@ -15,6 +23,77 @@ extern "C" {
+ #include "logger_manager.h"
+@@ -15,6 +24,77 @@ extern "C" {
  
  namespace video2x {
  
@@ -116,7 +276,7 @@ index c259ed0..36957f2 100644
 +// Number of processor instances that work on frames at the same time.
 +// Can be overridden with the VIDEO2X_GPU_WORKERS environment variable (1 disables).
 +int get_parallel_worker_count() {
-+    int workers = 2;
++    int workers = 3;
 +    if (const char* env = std::getenv("VIDEO2X_GPU_WORKERS")) {
 +        char* end = nullptr;
 +        long value = std::strtol(env, &end, 10);
@@ -138,7 +298,29 @@ index c259ed0..36957f2 100644
  VideoProcessor::VideoProcessor(
      const processors::ProcessorConfig proc_cfg,
      const encoder::EncoderConfig enc_cfg,
-@@ -116,8 +195,34 @@ int VideoProcessor::process(
+@@ -93,6 +173,21 @@ int VideoProcessor::process(
+         return handle_error(-1, "Failed to determine the output dimensions");
+     }
+ 
++    // Limit the output to the maximum size, the frames are scaled down after processing
++    int processed_width = output_width, processed_height = output_height;
++    conversions::fit_dimensions(
++        output_width, output_height, proc_cfg_.max_width, proc_cfg_.max_height
++    );
++    if (output_width != processed_width || output_height != processed_height) {
++        logger()->info(
++            "Output {}x{} is scaled down to {}x{}",
++            processed_width,
++            processed_height,
++            output_width,
++            output_height
++        );
++    }
++
+     // Initialize the encoder
+     encoder::Encoder encoder;
+     ret = encoder.init(
+@@ -116,8 +211,34 @@ int VideoProcessor::process(
          return handle_error(ret, "Failed to initialize filter");
      }
  
@@ -174,7 +356,7 @@ index c259ed0..36957f2 100644
      if (ret < 0) {
          return handle_error(ret, "Error processing frames");
      }
-@@ -198,19 +303,20 @@ int VideoProcessor::process_frames(
+@@ -198,19 +319,20 @@ int VideoProcessor::process_frames(
      // Read frames from the input file
      while (state_.load() != VideoProcessorState::Aborted) {
          ret = av_read_frame(ifmt_ctx, packet.get());
@@ -202,7 +384,7 @@ index c259ed0..36957f2 100644
              if (ret < 0) {
                  av_strerror(ret, errbuf, sizeof(errbuf));
                  logger()->critical("Error sending packet to decoder: {}", errbuf);
-@@ -227,8 +333,9 @@ int VideoProcessor::process_frames(
+@@ -227,8 +349,9 @@ int VideoProcessor::process_frames(
  
                  // Receive the decoded frame from the decoder
                  ret = avcodec_receive_frame(dec_ctx, frame.get());
@@ -213,7 +395,7 @@ index c259ed0..36957f2 100644
                      break;
                  } else if (ret < 0) {
                      av_strerror(ret, errbuf, sizeof(errbuf));
-@@ -274,6 +381,9 @@ int VideoProcessor::process_frames(
+@@ -274,6 +397,9 @@ int VideoProcessor::process_frames(
              }
          }
          av_packet_unref(packet.get());
@@ -223,7 +405,7 @@ index c259ed0..36957f2 100644
      }
  
      // Flush the processor
-@@ -311,6 +421,338 @@ int VideoProcessor::process_frames(
+@@ -311,11 +437,377 @@ int VideoProcessor::process_frames(
      return ret;
  }
  
@@ -369,6 +551,24 @@ index c259ed0..36957f2 100644
 +                    wret = run_processor(
 +                        processors[w].get(), item.prev_frame, item.frame, out_frames
 +                    );
++                }
++
++                // Scale down here so that the writer thread only has to encode
++                for (AVFrame*& f : out_frames) {
++                    if (wret < 0) {
++                        break;
++                    }
++                    if (f->width != enc_ctx->width || f->height != enc_ctx->height) {
++                        AVFrame* scaled = conversions::scale_avframe(
++                            f, enc_ctx->width, enc_ctx->height, enc_ctx->pix_fmt
++                        );
++                        if (scaled == nullptr) {
++                            wret = AVERROR(ENOMEM);
++                            break;
++                        }
++                        av_frame_free(&f);
++                        f = scaled;
++                    }
 +                }
 +                free_item(item);
 +                if (wret < 0) {
@@ -562,3 +762,39 @@ index c259ed0..36957f2 100644
  int VideoProcessor::write_frame(AVFrame* frame, encoder::Encoder& encoder) {
      char errbuf[AV_ERROR_MAX_STRING_SIZE];
      int ret = 0;
+ 
+     if (!benchmark_) {
++        // Scale the frame down if the output size is limited
++        AVCodecContext* enc_ctx = encoder.get_encoder_context();
++        std::unique_ptr<AVFrame, decltype(&avutils::av_frame_deleter)> scaled(
++            nullptr, &avutils::av_frame_deleter
++        );
++        if (frame->width != enc_ctx->width || frame->height != enc_ctx->height) {
++            scaled.reset(conversions::scale_avframe(
++                frame, enc_ctx->width, enc_ctx->height, enc_ctx->pix_fmt
++            ));
++            if (scaled == nullptr) {
++                logger()->critical("Error scaling frame to the output size");
++                return AVERROR(ENOMEM);
++            }
++            frame = scaled.get();
++        }
++
+         ret = encoder.write_frame(frame, frame_idx_.load());
+         if (ret < 0) {
+             av_strerror(ret, errbuf, sizeof(errbuf));
+diff --git a/tools/video2x/src/argparse.cpp b/tools/video2x/src/argparse.cpp
+index e0e7931..24e52a5 100644
+--- a/tools/video2x/src/argparse.cpp
++++ b/tools/video2x/src/argparse.cpp
+@@ -137,6 +137,10 @@ int parse_args(
+                 ->notifier([](int v) { validate_min(v, "scaling-factor", 2); }), "Scaling factor")
+             ("noise-level,n", po::value<int>(&proc_cfg.noise_level)
+                 ->notifier([](int v) { validate_min(v, "noise-level", -1); }), "Noise level")
++            ("max-width", po::value<int>(&proc_cfg.max_width)->default_value(0),
++                "Largest output width, larger results are scaled down (0 = no limit)")
++            ("max-height", po::value<int>(&proc_cfg.max_height)->default_value(0),
++                "Largest output height, larger results are scaled down (0 = no limit)")
+         ;
+ 
+         po::options_description interp_opts("Frame interpolation options");

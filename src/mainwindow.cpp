@@ -552,6 +552,9 @@ void MainWindow::addFilesWithConfig(const QStringList &fileNames)
     // Show the dialog to configure TaskConfig for all files added
     TaskConfigDialog taskConfigDialog(this);
 
+    // Show the expected result for the selected files
+    taskConfigDialog.setInputFiles(fileNames);
+
     // Set the output suffix based on the first input file's suffix
     // QFileInfo fileInfo = QFileInfo(fileNames[0]);
     // taskConfigDialog.setOutputSuffix("." + fileInfo.suffix());
