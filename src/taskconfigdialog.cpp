@@ -571,10 +571,10 @@ void TaskConfigDialog::updateOutputPreview()
             std::swap(maxWidth, maxHeight);
         }
         if (finalWidth > maxWidth || finalHeight > maxHeight) {
-            double factor = std::min(static_cast<double>(maxWidth) / finalWidth,
+            double factor = (std::min)(static_cast<double>(maxWidth) / finalWidth,
                                      static_cast<double>(maxHeight) / finalHeight);
-            finalWidth = std::max(2, static_cast<int>(std::floor(finalWidth * factor / 2.0)) * 2);
-            finalHeight = std::max(2, static_cast<int>(std::floor(finalHeight * factor / 2.0)) * 2);
+            finalWidth = (std::max)(2, static_cast<int>(std::floor(finalWidth * factor / 2.0)) * 2);
+            finalHeight = (std::max)(2, static_cast<int>(std::floor(finalHeight * factor / 2.0)) * 2);
         }
     }
 

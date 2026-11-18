@@ -74,7 +74,7 @@ index f60b552..ee76397 100644
  };
  
 diff --git a/src/conversions.cpp b/src/conversions.cpp
-index dd508af..8870460 100644
+index dd508af..63178bf 100644
 --- a/src/conversions.cpp
 +++ b/src/conversions.cpp
 @@ -1,5 +1,7 @@
@@ -152,11 +152,11 @@ index dd508af..8870460 100644
 +        return;
 +    }
 +
-+    double factor = std::min(
++    double factor = (std::min)(
 +        static_cast<double>(max_width) / width, static_cast<double>(max_height) / height
 +    );
-+    width = std::max(2, static_cast<int>(std::floor(width * factor / 2.0)) * 2);
-+    height = std::max(2, static_cast<int>(std::floor(height * factor / 2.0)) * 2);
++    width = (std::max)(2, static_cast<int>(std::floor(width * factor / 2.0)) * 2);
++    height = (std::max)(2, static_cast<int>(std::floor(height * factor / 2.0)) * 2);
 +}
 +
  // Convert AVFrame to ncnn::Mat by copying the data
