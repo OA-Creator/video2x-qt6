@@ -69,34 +69,37 @@ jobs:
         shell: pwsh
         run: |
           $install = Join-Path $pwd "third_party/video2x-install"
-          cmake -S third_party/video2x -B build-v2x `
-            -DVIDEO2X_BUILD_CLI=OFF `
-            -DVIDEO2X_USE_EXTERNAL_NCNN=OFF `
-            -DVIDEO2X_USE_EXTERNAL_SPDLOG=OFF `
-            -DVIDEO2X_USE_EXTERNAL_BOOST=OFF `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_INSTALL_PREFIX="$install" `
-            -DCMAKE_INSTALL_BINDIR=. `
-            -DCMAKE_INSTALL_LIBDIR=. `
-            -DCMAKE_INSTALL_DATADIR=.
+          $srcDir = Join-Path $pwd "third_party/video2x"
+          $buildDir = Join-Path $pwd "build-v2x"
+          cmake "-S$srcDir" "-B$buildDir" `
+            "-DVIDEO2X_BUILD_CLI=OFF" `
+            "-DVIDEO2X_USE_EXTERNAL_NCNN=OFF" `
+            "-DVIDEO2X_USE_EXTERNAL_SPDLOG=OFF" `
+            "-DVIDEO2X_USE_EXTERNAL_BOOST=OFF" `
+            "-DCMAKE_BUILD_TYPE=Release" `
+            "-DCMAKE_INSTALL_PREFIX=$install" `
+            "-DCMAKE_INSTALL_BINDIR=." `
+            "-DCMAKE_INSTALL_LIBDIR=." `
+            "-DCMAKE_INSTALL_DATADIR=."
           if ($LASTEXITCODE -ne 0) { throw "CMake-Konfiguration libvideo2x fehlgeschlagen" }
-          cmake --build build-v2x --config Release --parallel --target install
+          cmake --build "$buildDir" --config Release --parallel --target install
           if ($LASTEXITCODE -ne 0) { throw "Build libvideo2x fehlgeschlagen" }
 
       - name: Video2X Qt6 bauen
         shell: pwsh
         run: |
           $dist = Join-Path $pwd "dist/video2x-qt6"
-          cmake -S . -B build-gui `
-            -DUSE_EXTERNAL_SPDLOG=OFF `
-            -DUSE_SHARED_VIDEO2X=ON `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_INSTALL_PREFIX="$dist" `
-            -DCMAKE_INSTALL_BINDIR=.
+          $buildDir = Join-Path $pwd "build-gui"
+          cmake "-S$pwd" "-B$buildDir" `
+            "-DUSE_EXTERNAL_SPDLOG=OFF" `
+            "-DUSE_SHARED_VIDEO2X=ON" `
+            "-DCMAKE_BUILD_TYPE=Release" `
+            "-DCMAKE_INSTALL_PREFIX=$dist" `
+            "-DCMAKE_INSTALL_BINDIR=."
           if ($LASTEXITCODE -ne 0) { throw "CMake-Konfiguration GUI fehlgeschlagen" }
-          cmake --build build-gui --config Release --parallel
+          cmake --build "$buildDir" --config Release --parallel
           if ($LASTEXITCODE -ne 0) { throw "Build GUI fehlgeschlagen" }
-          cmake --install build-gui --config Release
+          cmake --install "$buildDir" --config Release
           if ($LASTEXITCODE -ne 0) { throw "Installation GUI fehlgeschlagen" }
 
       - name: Programmordner zusammenstellen
