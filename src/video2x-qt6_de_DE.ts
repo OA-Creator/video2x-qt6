@@ -837,6 +837,41 @@ Starten Sie die Anwendung neu, damit die Änderungen wirksam werden.</translatio
     </message>
     <message>
         <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Automatic (recommended)</source>
+        <translation>Automatisch (empfohlen)</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Automatic</source>
+        <translation>Automatisch</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Fills in the codec, bit rate and custom options for a common encoder setup. Automatic picks the best encoder the graphics card supports. The AMD presets encode on the graphics card (AMF).</source>
+        <translation>Trägt Codec, Bitrate und benutzerdefinierte Optionen für eine gängige Encoder-Einstellung ein. Automatisch wählt den besten Encoder, den die Grafikkarte unterstützt. Die AMD-Voreinstellungen kodieren auf der Grafikkarte (AMF).</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>H.264 on the processor</source>
+        <translation>H.264 auf dem Prozessor</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>%1 on the graphics card</source>
+        <translation>%1 auf der Grafikkarte</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>integrated</source>
+        <translation>integriert</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>&lt;b&gt;Detected:&lt;/b&gt; %1 · %2 → %3, %4 parallel jobs</source>
+        <translation>&lt;b&gt;Erkannt:&lt;/b&gt; %1 · %2 → %3, %4 parallele Aufträge</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
         <source>No limit</source>
         <translation>Keine Begrenzung</translation>
     </message>

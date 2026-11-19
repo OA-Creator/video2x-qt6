@@ -142,4 +142,4 @@ jobs:
             dist/Output/video2x-qt6-windows-amd64-installer.exe `
             dist/video2x-qt6-windows-amd64-portable.zip `
             --title "Video2X Qt6 (OA-Build ${{ github.run_number }})" `
-            --notes "Freie Modellwahl, AMD-Encoder-Voreinstellungen, ncnn $env:NCNN_VERSION, größere Kacheln bei viel VRAM, 3 parallele GPU-Aufträge, maximale Auflösung (Standard 4K) mit Ergebnis-Vorschau, Drehung von Handy-Videos bleibt erhalten, Rauschunterdrückung für realesr-generalv3 wirkt, letzte Bilder werden nicht mehr verschluckt."
+            --notes "Freie Modellwahl, AMD-Encoder-Voreinstellungen, ncnn $env:NCNN_VERSION, größere Kacheln bei viel VRAM, 3 parallele GPU-Aufträge, maximale Auflösung (Standard 4K) mit Ergebnis-Vorschau, Automatik: Grafikkarte und Encoder werden erkannt, Bitrate passend zur Auflösung, Einstellungen werden gemerkt, Drehung von Handy-Videos bleibt erhalten, Rauschunterdrückung für realesr-generalv3 wirkt, letzte Bilder werden nicht mehr verschluckt."

@@ -3,6 +3,7 @@
 
 #include <QComboBox>
 #include <QDialog>
+#include <vector>
 #include <QLabel>
 #include <QStringList>
 #include <QList>
@@ -43,6 +44,24 @@ private:
     void setupEncoderPresets();
     void setupGpuWorkers();
     void setupMaxResolution();
+    void setupHardwareDetection();
+    void updateHardwareInfo();
+    QString detectedEncoder() const;
+    int recommendedGpuWorkers() const;
+    void applyEncoderSettings(const QString &codec);
+    static QString encoderDescription(const QString &codec);
+    void saveSettings();
+    void restoreSettings();
+
+    struct GpuInfo
+    {
+        QString name;
+        uint32_t vendorId = 0;
+        bool integrated = false;
+        quint64 vramBytes = 0;
+    };
+    std::vector<GpuInfo> m_gpus;
+    QLabel *m_hardwareInfoLabel = nullptr;
     void updateOutputPreview();
     static bool probeVideoSize(const QString &fileName, int &width, int &height, bool &rotated);
     void applyEncoderPreset(int index);

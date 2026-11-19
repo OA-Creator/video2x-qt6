@@ -12,6 +12,8 @@ extern "C" {
 #include <QFileInfo>
 #include <QColor>
 #include <QPalette>
+#include <QSettings>
+#include <QSignalBlocker>
 #include <QSize>
 
 #include <QCoreApplication>
@@ -55,11 +57,12 @@ extern "C" {
 #define REALESRGAN_MODEL_LAST_BUILTIN REALESRGAN_MODEL_REALESR_GENERALV3
 
 // Encoder presets
-#define ENCODER_PRESET_CUSTOM 0
-#define ENCODER_PRESET_LIBX264 1
-#define ENCODER_PRESET_AMD_AV1 2
-#define ENCODER_PRESET_AMD_HEVC 3
-#define ENCODER_PRESET_AMD_H264 4
+#define ENCODER_PRESET_AUTO 0
+#define ENCODER_PRESET_CUSTOM 1
+#define ENCODER_PRESET_LIBX264 2
+#define ENCODER_PRESET_AMD_AV1 3
+#define ENCODER_PRESET_AMD_HEVC 4
+#define ENCODER_PRESET_AMD_H264 5
 
 // Real-CUGAN models
 #define REALCUGAN_MODEL_NOSE 0
@@ -251,6 +254,15 @@ TaskConfigDialog::TaskConfigDialog(QWidget *parent)
     // Enumerate and populate Vulkan devices
     populateVulkanDevices();
 
+    // Real recordings are the most common case
+    ui->realesrganModelComboBox->setCurrentIndex(REALESRGAN_MODEL_REALESR_GENERALV3);
+
+    // Show the detected hardware and choose matching settings
+    setupHardwareDetection();
+
+    // Use the settings of the last task
+    restoreSettings();
+
     // Set default optimal height
     resize(385, 560);
 }
@@ -398,6 +410,7 @@ void TaskConfigDialog::populateRealesrganModels()
 void TaskConfigDialog::setupEncoderPresets()
 {
     m_encoderPresetComboBox = new QComboBox(this);
+    m_encoderPresetComboBox->addItem(tr("Automatic (recommended)"));
     m_encoderPresetComboBox->addItem(tr("Custom"));
     m_encoderPresetComboBox->addItem(tr("Default (libx264, CPU)"));
     m_encoderPresetComboBox->addItem(tr("AMD AV1 (GPU)"));
@@ -405,7 +418,11 @@ void TaskConfigDialog::setupEncoderPresets()
     m_encoderPresetComboBox->addItem(tr("AMD H.264 (GPU)"));
     m_encoderPresetComboBox->setToolTip(
         tr("Fills in the codec, bit rate and custom options for a common encoder setup. "
+           "Automatic picks the best encoder the graphics card supports. "
            "The AMD presets encode on the graphics card (AMF)."));
+
+    // A bit rate of 0 lets hardware encoders choose one that fits the output size
+    ui->bitRateSpinBox->setSpecialValueText(tr("Automatic"));
 
     QHBoxLayout *presetLayout = new QHBoxLayout();
     presetLayout->addWidget(new QLabel(tr("Preset"), this));
@@ -613,6 +630,300 @@ void TaskConfigDialog::updateOutputPreview()
     m_outputPreviewLabel->setText(text);
 }
 
+// Try to open an encoder with a typical setup to see if the hardware supports it
+static bool canOpenEncoder(const char *name)
+{
+    const AVCodec *codec = avcodec_find_encoder_by_name(name);
+    if (codec == nullptr) {
+        return false;
+    }
+
+    AVCodecContext *ctx = avcodec_alloc_context3(codec);
+    if (ctx == nullptr) {
+        return false;
+    }
+
+    // Prefer NV12 or YUV420P, otherwise the first software format of the encoder
+    AVPixelFormat pixFmt = AV_PIX_FMT_NONE;
+    const AVPixelFormat *formats = nullptr;
+    int numConfigs = 0;
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 13, 100)
+    const void *configs = nullptr;
+    if (avcodec_get_supported_config(ctx, codec, AV_CODEC_CONFIG_PIX_FORMAT, 0, &configs, &numConfigs) >= 0) {
+        formats = static_cast<const AVPixelFormat *>(configs);
+    }
+#else
+    formats = codec->pix_fmts;
+    while (formats != nullptr && formats[numConfigs] != AV_PIX_FMT_NONE) {
+        numConfigs++;
+    }
+#endif
+    if (formats != nullptr) {
+        for (int i = 0; i < numConfigs; i++) {
+            if (formats[i] == AV_PIX_FMT_NV12 || formats[i] == AV_PIX_FMT_YUV420P) {
+                pixFmt = formats[i];
+                break;
+            }
+        }
+        if (pixFmt == AV_PIX_FMT_NONE && numConfigs > 0) {
+            pixFmt = formats[0];
+        }
+    }
+    if (pixFmt == AV_PIX_FMT_NONE) {
+        pixFmt = AV_PIX_FMT_NV12;
+    }
+
+    ctx->width = 1920;
+    ctx->height = 1080;
+    ctx->pix_fmt = pixFmt;
+    ctx->time_base = AVRational{1, 30};
+    ctx->framerate = AVRational{30, 1};
+    ctx->bit_rate = 8000000;
+
+    bool ok = avcodec_open2(ctx, codec, nullptr) == 0;
+    avcodec_free_context(&ctx);
+    return ok;
+}
+
+QString TaskConfigDialog::detectedEncoder() const
+{
+    int index = ui->vulkanDeviceSelectionComboBox->currentIndex();
+    uint32_t vendorId = (index >= 0 && index < static_cast<int>(m_gpus.size()))
+                            ? m_gpus[static_cast<size_t>(index)].vendorId
+                            : 0;
+
+    // The result does not change while the program runs
+    static QMap<uint32_t, QString> cache;
+    if (cache.contains(vendorId)) {
+        return cache.value(vendorId);
+    }
+
+    QStringList candidates;
+    switch (vendorId) {
+    case 0x1002: // AMD
+        candidates << "av1_amf" << "hevc_amf" << "h264_amf";
+        break;
+    case 0x10DE: // NVIDIA
+        candidates << "av1_nvenc" << "hevc_nvenc" << "h264_nvenc";
+        break;
+    case 0x8086: // Intel
+        candidates << "av1_qsv" << "hevc_qsv" << "h264_qsv";
+        break;
+    default:
+        break;
+    }
+
+    QString result = "libx264";
+    for (const QString &candidate : candidates) {
+        if (canOpenEncoder(candidate.toUtf8().constData())) {
+            result = candidate;
+            break;
+        }
+    }
+
+    cache.insert(vendorId, result);
+    return result;
+}
+
+int TaskConfigDialog::recommendedGpuWorkers() const
+{
+    int index = ui->vulkanDeviceSelectionComboBox->currentIndex();
+    if (index < 0 || index >= static_cast<int>(m_gpus.size())) {
+        return 1;
+    }
+    const GpuInfo &gpu = m_gpus[static_cast<size_t>(index)];
+    const quint64 gib = 1024ull * 1024ull * 1024ull;
+    if (gpu.integrated || gpu.vramBytes < 6 * gib) {
+        return 1;
+    }
+    if (gpu.vramBytes < 10 * gib) {
+        return 2;
+    }
+    return 3;
+}
+
+void TaskConfigDialog::applyEncoderSettings(const QString &codec)
+{
+    m_customEncoderOptionsTableModel->removeRows(0, m_customEncoderOptionsTableModel->rowCount());
+    ui->codecLineEdit->setText(codec);
+
+    if (codec == "libx264") {
+        ui->bitRateSpinBox->setValue(0);
+        addCustomEncoderOption("crf", "20");
+        addCustomEncoderOption("preset", "slow");
+        return;
+    }
+
+    // Hardware encoders: the bit rate is chosen automatically from the output size
+    ui->bitRateSpinBox->setValue(0);
+    if (codec.endsWith("_amf")) {
+        addCustomEncoderOption("quality", "quality");
+    } else if (codec.endsWith("_nvenc")) {
+        addCustomEncoderOption("preset", "p5");
+    } else if (codec.endsWith("_qsv")) {
+        addCustomEncoderOption("preset", "slow");
+    }
+}
+
+QString TaskConfigDialog::encoderDescription(const QString &codec)
+{
+    QString format = codec.section('_', 0, 0).toUpper();
+    if (format == "LIBX264") {
+        return tr("H.264 on the processor");
+    }
+    if (format == "H264") {
+        format = "H.264";
+    }
+    return tr("%1 on the graphics card").arg(format);
+}
+
+void TaskConfigDialog::setupHardwareDetection()
+{
+    m_hardwareInfoLabel = new QLabel(this);
+    m_hardwareInfoLabel->setTextFormat(Qt::RichText);
+    m_hardwareInfoLabel->setWordWrap(true);
+    ui->verticalLayout_4->addWidget(m_hardwareInfoLabel);
+
+    connect(ui->vulkanDeviceSelectionComboBox,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            [this]() {
+                m_gpuWorkersSpinBox->setValue(recommendedGpuWorkers());
+                if (m_encoderPresetComboBox->currentIndex() == ENCODER_PRESET_AUTO) {
+                    applyEncoderPreset(ENCODER_PRESET_AUTO);
+                }
+                updateHardwareInfo();
+            });
+
+    m_gpuWorkersSpinBox->setValue(recommendedGpuWorkers());
+    {
+        QSignalBlocker blocker(m_encoderPresetComboBox);
+        m_encoderPresetComboBox->setCurrentIndex(ENCODER_PRESET_AUTO);
+    }
+    applyEncoderPreset(ENCODER_PRESET_AUTO);
+    updateHardwareInfo();
+}
+
+void TaskConfigDialog::updateHardwareInfo()
+{
+    int index = ui->vulkanDeviceSelectionComboBox->currentIndex();
+    if (index < 0 || index >= static_cast<int>(m_gpus.size())) {
+        m_hardwareInfoLabel->clear();
+        return;
+    }
+
+    const GpuInfo &gpu = m_gpus[static_cast<size_t>(index)];
+    QString memory = gpu.integrated
+                         ? tr("integrated")
+                         : QString("%1 GB").arg(
+                               qRound(static_cast<double>(gpu.vramBytes) / (1024.0 * 1024.0 * 1024.0)));
+    m_hardwareInfoLabel->setText(tr("<b>Detected:</b> %1 · %2 → %3, %4 parallel jobs")
+                                     .arg(gpu.name.toHtmlEscaped(),
+                                          memory,
+                                          encoderDescription(detectedEncoder()))
+                                     .arg(recommendedGpuWorkers()));
+}
+
+void TaskConfigDialog::saveSettings()
+{
+    QSettings settings(QSettings::IniFormat, QSettings::UserScope, "video2x", "video2x-qt6-task");
+    settings.setValue("vulkanDevice", ui->vulkanDeviceSelectionComboBox->currentIndex());
+    settings.setValue("gpuWorkers", m_gpuWorkersSpinBox->value());
+    settings.setValue("processingMode", ui->processingModeSelectionComboBox->currentIndex());
+    settings.setValue("filter", ui->filterSelectionComboBox->currentIndex());
+    settings.setValue("realesrganModel", ui->realesrganModelComboBox->currentText());
+    settings.setValue("realcuganModel", ui->realcuganModelComboBox->currentText());
+    settings.setValue("rifeModel", ui->rifeModelComboBox->currentText());
+    settings.setValue("scalingFactor", ui->scalingFactorSpinBox->value());
+    settings.setValue("noiseLevel", ui->noiseLevelSpinBox->value());
+    settings.setValue("frameRateMultiplier", ui->frameRateMultiplierSpinBox->value());
+    settings.setValue("maxResolution", m_maxResolutionComboBox->currentIndex());
+    settings.setValue("encoderPreset", m_encoderPresetComboBox->currentIndex());
+    settings.setValue("codec", ui->codecLineEdit->text());
+    settings.setValue("bitRate", ui->bitRateSpinBox->value());
+
+    QStringList options;
+    for (int row = 0; row < m_customEncoderOptionsTableModel->rowCount(); row++) {
+        QString key = m_customEncoderOptionsTableModel->index(row, 0).data().toString();
+        QString value = m_customEncoderOptionsTableModel->index(row, 1).data().toString();
+        if (!key.isEmpty()) {
+            options << key + "=" + value;
+        }
+    }
+    settings.setValue("customOptions", options);
+}
+
+void TaskConfigDialog::restoreSettings()
+{
+    QSettings settings(QSettings::IniFormat, QSettings::UserScope, "video2x", "video2x-qt6-task");
+    if (!settings.contains("encoderPreset")) {
+        // First start: keep the automatic settings
+        return;
+    }
+
+    int device = settings.value("vulkanDevice", 0).toInt();
+    if (device >= 0 && device < ui->vulkanDeviceSelectionComboBox->count()) {
+        ui->vulkanDeviceSelectionComboBox->setCurrentIndex(device);
+    }
+    m_gpuWorkersSpinBox->setValue(settings.value("gpuWorkers", recommendedGpuWorkers()).toInt());
+
+    int mode = settings.value("processingMode", 0).toInt();
+    if (mode >= 0 && mode < ui->processingModeSelectionComboBox->count()) {
+        ui->processingModeSelectionComboBox->setCurrentIndex(mode);
+    }
+    int filter = settings.value("filter", ESRGAN_MODE).toInt();
+    if (filter >= 0 && filter < ui->filterSelectionComboBox->count()) {
+        ui->filterSelectionComboBox->setCurrentIndex(filter);
+    }
+
+    auto restoreText = [&settings](QComboBox *comboBox, const char *key) {
+        int index = comboBox->findText(settings.value(key).toString());
+        if (index >= 0) {
+            comboBox->setCurrentIndex(index);
+        }
+    };
+    restoreText(ui->realesrganModelComboBox, "realesrganModel");
+    restoreText(ui->realcuganModelComboBox, "realcuganModel");
+    restoreText(ui->rifeModelComboBox, "rifeModel");
+
+    ui->scalingFactorSpinBox->setValue(
+        settings.value("scalingFactor", ui->scalingFactorSpinBox->value()).toInt());
+    ui->noiseLevelSpinBox->setValue(
+        settings.value("noiseLevel", ui->noiseLevelSpinBox->value()).toInt());
+    ui->frameRateMultiplierSpinBox->setValue(
+        settings.value("frameRateMultiplier", ui->frameRateMultiplierSpinBox->value()).toInt());
+
+    int maxResolution = settings.value("maxResolution", 3).toInt();
+    if (maxResolution >= 0 && maxResolution < m_maxResolutionComboBox->count()) {
+        m_maxResolutionComboBox->setCurrentIndex(maxResolution);
+    }
+
+    int preset = settings.value("encoderPreset", ENCODER_PRESET_AUTO).toInt();
+    if (preset < 0 || preset >= m_encoderPresetComboBox->count()) {
+        preset = ENCODER_PRESET_AUTO;
+    }
+    {
+        QSignalBlocker blocker(m_encoderPresetComboBox);
+        m_encoderPresetComboBox->setCurrentIndex(preset);
+    }
+    if (preset == ENCODER_PRESET_CUSTOM) {
+        // Restore the codec and options exactly as they were
+        m_customEncoderOptionsTableModel->removeRows(0, m_customEncoderOptionsTableModel->rowCount());
+        ui->codecLineEdit->setText(settings.value("codec", "libx264").toString());
+        ui->bitRateSpinBox->setValue(settings.value("bitRate", 0).toInt());
+        const QStringList options = settings.value("customOptions").toStringList();
+        for (const QString &option : options) {
+            addCustomEncoderOption(option.section('=', 0, 0), option.section('=', 1));
+        }
+    } else {
+        // Presets are applied fresh so they match the current hardware
+        applyEncoderPreset(preset);
+    }
+
+    updateHardwareInfo();
+    updateOutputPreview();
+}
+
 void TaskConfigDialog::applyEncoderPreset(int index)
 {
     if (index == ENCODER_PRESET_CUSTOM) {
@@ -623,25 +934,19 @@ void TaskConfigDialog::applyEncoderPreset(int index)
 
     switch (index) {
     case ENCODER_PRESET_LIBX264:
-        ui->codecLineEdit->setText("libx264");
-        ui->bitRateSpinBox->setValue(0);
-        addCustomEncoderOption("crf", "20");
-        addCustomEncoderOption("preset", "slow");
+        applyEncoderSettings("libx264");
+        break;
+    case ENCODER_PRESET_AUTO:
+        applyEncoderSettings(detectedEncoder());
         break;
     case ENCODER_PRESET_AMD_AV1:
-        ui->codecLineEdit->setText("av1_amf");
-        ui->bitRateSpinBox->setValue(25000000);
-        addCustomEncoderOption("quality", "quality");
+        applyEncoderSettings("av1_amf");
         break;
     case ENCODER_PRESET_AMD_HEVC:
-        ui->codecLineEdit->setText("hevc_amf");
-        ui->bitRateSpinBox->setValue(25000000);
-        addCustomEncoderOption("quality", "quality");
+        applyEncoderSettings("hevc_amf");
         break;
     case ENCODER_PRESET_AMD_H264:
-        ui->codecLineEdit->setText("h264_amf");
-        ui->bitRateSpinBox->setValue(25000000);
-        addCustomEncoderOption("quality", "quality");
+        applyEncoderSettings("h264_amf");
         break;
     default:
         break;
@@ -689,12 +994,29 @@ void TaskConfigDialog::populateVulkanDevices()
 
     // Populate GPU information
     ui->vulkanDeviceSelectionComboBox->clear();
+    m_gpus.clear();
     for (uint32_t i = 0; i < device_count; i++) {
         VkPhysicalDevice device = physical_devices[i];
         VkPhysicalDeviceProperties device_properties;
         vkGetPhysicalDeviceProperties(device, &device_properties);
         ui->vulkanDeviceSelectionComboBox->addItem(QString::number(i) + ". "
                                                    + device_properties.deviceName);
+
+        // Remember vendor, type and video memory for the automatic settings
+        VkPhysicalDeviceMemoryProperties memory_properties;
+        vkGetPhysicalDeviceMemoryProperties(device, &memory_properties);
+        VkDeviceSize vram = 0;
+        for (uint32_t h = 0; h < memory_properties.memoryHeapCount; h++) {
+            if (memory_properties.memoryHeaps[h].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) {
+                vram = (std::max)(vram, memory_properties.memoryHeaps[h].size);
+            }
+        }
+        GpuInfo info;
+        info.name = QString::fromUtf8(device_properties.deviceName);
+        info.vendorId = device_properties.vendorID;
+        info.integrated = device_properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+        info.vramBytes = static_cast<quint64>(vram);
+        m_gpus.push_back(info);
         video2x::logger()->debug("Found Vulkan device: {}.", device_properties.deviceName);
     }
 
@@ -1147,6 +1469,8 @@ void TaskConfigDialog::setOutputSuffix(QString suffix)
 
 void TaskConfigDialog::setOutputCodec(QString codec)
 {
+    QSignalBlocker blocker(m_encoderPresetComboBox);
+    m_encoderPresetComboBox->setCurrentIndex(ENCODER_PRESET_CUSTOM);
     ui->codecLineEdit->setText(codec);
 }
 
@@ -1194,6 +1518,9 @@ void TaskConfigDialog::on_applyPushButton_clicked()
             return;
         }
     }
+
+    // Remember the settings for the next task
+    saveSettings();
 
     accept();
 }
