@@ -623,8 +623,8 @@ void TaskConfigDialog::updateOutputPreview()
 
     if (noBenefit) {
         text += QString("<br><span style=\"color:#d97706\">%1</span>")
-                    .arg(tr("The video already has this resolution or more. Upscaling brings no "
-                            "benefit here."));
+                    .arg(tr("The resolution stays the same. The AI still sharpens and denoises the "
+                            "picture, but needs the full processing time for it."));
     }
 
     m_outputPreviewLabel->setText(text);

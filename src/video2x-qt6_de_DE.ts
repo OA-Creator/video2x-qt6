@@ -383,6 +383,11 @@ Dies kann dazu führen, dass die Software nicht ordnungsgemäß funktioniert. Bi
         <translation> Tage</translation>
     </message>
     <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>determining...</source>
+        <translation>wird ermittelt …</translation>
+    </message>
+    <message>
         <location filename="mainwindow.cpp" line="1040"/>
         <source>Processing file </source>
         <translation>Verarbeitung der Datei </translation>
@@ -927,8 +932,8 @@ Starten Sie die Anwendung neu, damit die Änderungen wirksam werden.</translatio
     </message>
     <message>
         <location filename="taskconfigdialog.cpp" line="1"/>
-        <source>The video already has this resolution or more. Upscaling brings no benefit here.</source>
-        <translation>Das Video hat diese Auflösung schon oder mehr. Hochskalieren bringt hier nichts.</translation>
+        <source>The resolution stays the same. The AI still sharpens and denoises the picture, but needs the full processing time for it.</source>
+        <translation>Die Auflösung bleibt gleich. Die KI schärft und entrauscht das Bild trotzdem, braucht dafür aber die volle Rechenzeit.</translation>
     </message>
     <message>
         <location filename="taskconfigdialog.cpp" line="1"/>

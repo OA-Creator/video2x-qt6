@@ -966,7 +966,10 @@ void MainWindow::on_progressUpdate(int totalFrames, int processedFrames)
     const double millisecondsInADay = 24 * 60 * 60 * 1000;
     QString remainingString;
 
-    if (remainingMilliseconds >= millisecondsInADay) {
+    if (processedFrames <= 0 || totalFrames <= 0) {
+        // No frame finished yet, nothing to estimate from
+        remainingString = tr("determining...");
+    } else if (remainingMilliseconds >= millisecondsInADay) {
         // If remaining time is greater than one day
         int remainingDays = static_cast<int>(remainingMilliseconds / millisecondsInADay);
         if (remainingDays < 0) {
