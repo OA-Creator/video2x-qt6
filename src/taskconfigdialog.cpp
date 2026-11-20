@@ -407,7 +407,9 @@ void TaskConfigDialog::populateRealesrganModels()
     // Append the models that are not already part of the built-in list
     for (auto it = m_realesrganModelScales.constBegin(); it != m_realesrganModelScales.constEnd();
          ++it) {
-        if (ui->realesrganModelComboBox->findData(it.key()) < 0) {
+        // The built-in entries only get their item data later, so check the text as well
+        if (ui->realesrganModelComboBox->findData(it.key()) < 0
+            && ui->realesrganModelComboBox->findText(it.key()) < 0) {
             ui->realesrganModelComboBox->addItem(it.key(), it.key());
         }
     }
