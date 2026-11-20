@@ -13,6 +13,7 @@ final class ImageProcessor {
     }
 
     static void run(Context context, Job job, Job.Plan plan) throws Exception {
+        CrashReport.step("Foto lesen");
         ImageDecoder.Source source = ImageDecoder.createSource(context.getContentResolver(), job.uri);
         Bitmap in = ImageDecoder.decodeBitmap(source, (decoder, info, src) -> {
             decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
@@ -25,12 +26,14 @@ final class ImageProcessor {
             in = copy;
         }
 
+        CrashReport.step("Foto gelesen " + in.getWidth() + "x" + in.getHeight() + " " + in.getConfig());
         job.detail = "KI rechnet …";
         Jobs.get().changed();
         long start = System.nanoTime();
         Bitmap out = Bitmap.createBitmap(plan.finalWidth, plan.finalHeight, Bitmap.Config.ARGB_8888);
         boolean ok = Native.processBitmap(in, out, plan.prescaleWidth, plan.prescaleHeight);
         in.recycle();
+        CrashReport.step("KI zurück: " + ok);
         if (!ok) {
             out.recycle();
             throw new IllegalStateException("Die KI konnte das Foto nicht bearbeiten.");
@@ -56,6 +59,7 @@ final class ImageProcessor {
             out.recycle();
         }
         Output.publish(context, target);
+        CrashReport.step("Gespeichert: " + name);
         job.outputUri = target;
         job.outputName = "Bilder/OliVision/" + name;
         job.outputBytes = Output.size(context, target);

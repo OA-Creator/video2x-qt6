@@ -36,8 +36,11 @@ public final class ProcessingService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        CrashReport.install(this);
+        CrashReport.step("Dienst startet (Android " + Build.VERSION.SDK_INT + ")");
         createChannels(this);
         Notification n = build(this, "Startet …", 0, true);
+        CrashReport.step("Benachrichtigung bereit");
         if (Build.VERSION.SDK_INT >= 35) {
             startForeground(ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING);
         } else if (Build.VERSION.SDK_INT >= 29) {
@@ -45,6 +48,7 @@ public final class ProcessingService extends Service {
         } else {
             startForeground(ID, n);
         }
+        CrashReport.step("Vordergrund-Dienst läuft");
         if (worker == null) {
             PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "OliVision:work");
@@ -81,7 +85,12 @@ public final class ProcessingService extends Service {
             job.detail = "KI wird geladen …";
             jobs.changed();
             updateNotification(this);
+            CrashReport.step((job.isVideo ? "Video " : "Foto ") + job.width + "x" + job.height
+                    + " → KI " + plan.aiWidth + "x" + plan.aiHeight + ", Ziel " + plan.finalWidth + "x"
+                    + plan.finalHeight + ", vorher verkleinern " + plan.prescaleWidth + "x" + plan.prescaleHeight
+                    + ", Modell " + plan.modelKey);
             try {
+                CrashReport.step("Modell laden");
                 if (!Output.loadModel(this, plan.modelKey)) {
                     throw new IllegalStateException("Die KI lässt sich auf diesem Handy nicht starten.");
                 }
@@ -93,6 +102,7 @@ public final class ProcessingService extends Service {
                 job.state = Job.State.DONE;
                 job.detail = "";
                 done++;
+                CrashReport.step("Fertig");
             } catch (InterruptedException e) {
                 job.state = Job.State.ABORTED;
                 job.detail = "";
@@ -102,6 +112,7 @@ public final class ProcessingService extends Service {
                 String msg = e.getMessage();
                 job.detail = msg != null && !msg.isEmpty() ? msg : e.getClass().getSimpleName();
                 lastError = job.detail;
+                CrashReport.step("Fehler: " + job.detail);
                 if (!jobs.abort) {
                     failed++;
                 }

@@ -31,7 +31,10 @@ final class Output {
         } catch (Exception e) {
             return false;
         }
-        return Native.init(param.getAbsolutePath(), bin.getAbsolutePath());
+        CrashReport.step("Modell kopiert, KI wird gestartet");
+        boolean ok = Native.init(param.getAbsolutePath(), bin.getAbsolutePath());
+        CrashReport.step("KI gestartet: " + ok);
+        return ok;
     }
 
     private static void copyAsset(Context context, String asset, File target) throws Exception {

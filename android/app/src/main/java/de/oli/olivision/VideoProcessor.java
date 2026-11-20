@@ -58,8 +58,11 @@ final class VideoProcessor {
             outFd = context.getContentResolver().openFileDescriptor(target, "rw");
             muxer = new MediaMuxer(outFd.getFileDescriptor(), MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4);
             muxer.setOrientationHint(job.rotation);
+            CrashReport.step("Video geöffnet");
             createEncoder();
+            CrashReport.step("Encoder bereit");
             loop();
+            CrashReport.step("Bilder fertig: " + framesDone);
             finishAudio();
             muxer.stop();
             muxer.release();
@@ -262,6 +265,10 @@ final class VideoProcessor {
         int h = in.getCropRect() != null ? in.getCropRect().height() : in.getHeight();
         w = Math.min(w, job.width) & ~1;
         h = Math.min(h, job.height) & ~1;
+        if (framesDone == 0) {
+            CrashReport.step("Erstes Bild: Format " + in.getFormat() + ", Pixelabstand " + ip[0].getPixelStride()
+                    + "/" + ip[1].getPixelStride() + ", Ausgabe " + op[1].getPixelStride());
+        }
         boolean ok = Native.processYuv(
                 ip[0].getBuffer(), ip[0].getRowStride(), ip[0].getPixelStride(),
                 ip[1].getBuffer(), ip[2].getBuffer(), ip[1].getRowStride(), ip[1].getPixelStride(),

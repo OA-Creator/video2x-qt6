@@ -69,6 +69,7 @@ public final class MainActivity extends Activity implements Jobs.Listener {
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
+        CrashReport.install(this);
         settings = Settings.load(this);
         getWindow().setStatusBarColor(HEADER);
         getWindow().setNavigationBarColor(NAVY);
@@ -77,6 +78,9 @@ public final class MainActivity extends Activity implements Jobs.Listener {
         loadGpuName();
         handleShare(getIntent());
         onJobsChanged();
+        if (!Jobs.get().running) {
+            CrashReport.showIfCrashed(this);
+        }
     }
 
     @Override
@@ -591,6 +595,7 @@ public final class MainActivity extends Activity implements Jobs.Listener {
         }
         settings.save(this);
         jobs.runSettings = settings.copy();
+        CrashReport.step("Start gedrückt");
         jobs.running = true;
         jobs.abort = false;
         jobs.paused = false;
