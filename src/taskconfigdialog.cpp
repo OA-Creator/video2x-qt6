@@ -9,7 +9,10 @@ extern "C" {
 #include <algorithm>
 #include <cmath>
 
+#include <QCheckBox>
 #include <QFileInfo>
+#include <QListView>
+#include <QVariant>
 #include <QColor>
 #include <QPalette>
 #include <QSettings>
@@ -254,6 +257,9 @@ TaskConfigDialog::TaskConfigDialog(QWidget *parent)
     // Enumerate and populate Vulkan devices
     populateVulkanDevices();
 
+    // Describe the models and add the option to hide the cartoon models
+    setupModelLabelsAndAnimeFilter();
+
     // Real recordings are the most common case
     ui->realesrganModelComboBox->setCurrentIndex(REALESRGAN_MODEL_REALESR_GENERALV3);
 
@@ -286,7 +292,7 @@ void TaskConfigDialog::updateScalingFactorAndNoiseLevelRange()
 {
     if (ui->filterSelectionComboBox->currentIndex() == ESRGAN_MODE) {
         const QList<int> modelScales = m_realesrganModelScales.value(
-            ui->realesrganModelComboBox->currentText());
+            realesrganModelName());
 
         if (ui->realesrganModelComboBox->currentIndex() > REALESRGAN_MODEL_LAST_BUILTIN
             && !modelScales.isEmpty()) {
@@ -401,8 +407,8 @@ void TaskConfigDialog::populateRealesrganModels()
     // Append the models that are not already part of the built-in list
     for (auto it = m_realesrganModelScales.constBegin(); it != m_realesrganModelScales.constEnd();
          ++it) {
-        if (ui->realesrganModelComboBox->findText(it.key()) < 0) {
-            ui->realesrganModelComboBox->addItem(it.key());
+        if (ui->realesrganModelComboBox->findData(it.key()) < 0) {
+            ui->realesrganModelComboBox->addItem(it.key(), it.key());
         }
     }
 }
@@ -736,6 +742,14 @@ int TaskConfigDialog::recommendedGpuWorkers() const
     if (gpu.integrated || gpu.vramBytes < 6 * gib) {
         return 1;
     }
+
+    // The large Real-ESRGAN models (realesrgan-plus*) already fill the GPU on their own
+    // and need several times more video memory
+    if (ui->processingModeSelectionComboBox->currentIndex() == FILTER_MODE
+        && ui->filterSelectionComboBox->currentIndex() == ESRGAN_MODE
+        && realesrganModelName().startsWith("realesrgan-plus")) {
+        return 1;
+    }
     if (gpu.vramBytes < 10 * gib) {
         return 2;
     }
@@ -795,6 +809,24 @@ void TaskConfigDialog::setupHardwareDetection()
                 updateHardwareInfo();
             });
 
+    // The recommendation depends on the processor and model as well
+    auto updateWorkers = [this]() {
+        m_gpuWorkersSpinBox->setValue(recommendedGpuWorkers());
+        updateHardwareInfo();
+    };
+    connect(ui->processingModeSelectionComboBox,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            updateWorkers);
+    connect(ui->filterSelectionComboBox,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            updateWorkers);
+    connect(ui->realesrganModelComboBox,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            updateWorkers);
+
     m_gpuWorkersSpinBox->setValue(recommendedGpuWorkers());
     {
         QSignalBlocker blocker(m_encoderPresetComboBox);
@@ -831,7 +863,8 @@ void TaskConfigDialog::saveSettings()
     settings.setValue("gpuWorkers", m_gpuWorkersSpinBox->value());
     settings.setValue("processingMode", ui->processingModeSelectionComboBox->currentIndex());
     settings.setValue("filter", ui->filterSelectionComboBox->currentIndex());
-    settings.setValue("realesrganModel", ui->realesrganModelComboBox->currentText());
+    settings.setValue("realesrganModel", realesrganModelName());
+    settings.setValue("showAnimeModels", m_showAnimeCheckBox->isChecked());
     settings.setValue("realcuganModel", ui->realcuganModelComboBox->currentText());
     settings.setValue("rifeModel", ui->rifeModelComboBox->currentText());
     settings.setValue("scalingFactor", ui->scalingFactorSpinBox->value());
@@ -871,8 +904,10 @@ void TaskConfigDialog::restoreSettings()
     if (mode >= 0 && mode < ui->processingModeSelectionComboBox->count()) {
         ui->processingModeSelectionComboBox->setCurrentIndex(mode);
     }
+    m_showAnimeCheckBox->setChecked(settings.value("showAnimeModels", false).toBool());
     int filter = settings.value("filter", ESRGAN_MODE).toInt();
-    if (filter >= 0 && filter < ui->filterSelectionComboBox->count()) {
+    if (filter >= 0 && filter < ui->filterSelectionComboBox->count()
+        && !isAnimeHidden(ui->filterSelectionComboBox, filter)) {
         ui->filterSelectionComboBox->setCurrentIndex(filter);
     }
 
@@ -882,7 +917,13 @@ void TaskConfigDialog::restoreSettings()
             comboBox->setCurrentIndex(index);
         }
     };
-    restoreText(ui->realesrganModelComboBox, "realesrganModel");
+    {
+        int modelIndex = ui->realesrganModelComboBox->findData(
+            settings.value("realesrganModel").toString());
+        if (modelIndex >= 0 && !isAnimeHidden(ui->realesrganModelComboBox, modelIndex)) {
+            ui->realesrganModelComboBox->setCurrentIndex(modelIndex);
+        }
+    }
     restoreText(ui->realcuganModelComboBox, "realcuganModel");
     restoreText(ui->rifeModelComboBox, "rifeModel");
 
@@ -922,6 +963,110 @@ void TaskConfigDialog::restoreSettings()
 
     updateHardwareInfo();
     updateOutputPreview();
+}
+
+QString TaskConfigDialog::realesrganModelDescription(const QString &modelName)
+{
+    if (modelName == "realesr-generalv3") {
+        return tr("Real recordings (phone, camcorder) · fast · recommended");
+    }
+    if (modelName == "realesrgan-plus") {
+        return tr("Real recordings · very strong sharpening · very slow");
+    }
+    if (modelName == "realesr-animevideov3") {
+        return tr("Cartoons and anime · very fast");
+    }
+    if (modelName == "realesrgan-plus-anime") {
+        return tr("Cartoons and anime · strong sharpening · slow");
+    }
+    return tr("Additional model from the models folder");
+}
+
+QString TaskConfigDialog::realesrganModelName() const
+{
+    QVariant data = ui->realesrganModelComboBox->currentData();
+    return data.isValid() ? data.toString() : ui->realesrganModelComboBox->currentText();
+}
+
+bool TaskConfigDialog::isAnimeHidden(QComboBox *comboBox, int index) const
+{
+    QListView *view = qobject_cast<QListView *>(comboBox->view());
+    return view != nullptr && view->isRowHidden(index);
+}
+
+void TaskConfigDialog::setupModelLabelsAndAnimeFilter()
+{
+    // Short model names in the list, a description below says what each model is for
+    for (int i = 0; i < ui->realesrganModelComboBox->count(); i++) {
+        if (!ui->realesrganModelComboBox->itemData(i).isValid()) {
+            ui->realesrganModelComboBox->setItemData(i, ui->realesrganModelComboBox->itemText(i));
+        }
+        ui->realesrganModelComboBox->setItemData(i,
+                                                 realesrganModelDescription(
+                                                     ui->realesrganModelComboBox->itemData(i)
+                                                         .toString()),
+                                                 Qt::ToolTipRole);
+    }
+
+    m_modelDescriptionLabel = new QLabel(this);
+    m_modelDescriptionLabel->setWordWrap(true);
+    ui->verticalLayout_5->addWidget(m_modelDescriptionLabel);
+    auto updateDescription = [this]() {
+        const QColor textColor = palette().color(QPalette::WindowText);
+        const QColor windowColor = palette().color(QPalette::Window);
+        const QString mutedColor = QColor((textColor.red() + windowColor.red()) / 2,
+                                          (textColor.green() + windowColor.green()) / 2,
+                                          (textColor.blue() + windowColor.blue()) / 2)
+                                       .name();
+        m_modelDescriptionLabel->setText(
+            QString("<span style=\"color:%1\">%2</span>")
+                .arg(mutedColor, realesrganModelDescription(realesrganModelName())));
+    };
+    connect(ui->realesrganModelComboBox,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this,
+            updateDescription);
+    updateDescription();
+
+    m_showAnimeCheckBox = new QCheckBox(tr("Show cartoon models"), this);
+    m_showAnimeCheckBox->setToolTip(
+        tr("Real-CUGAN, Anime4K (libplacebo) and the anime models of Real-ESRGAN are made "
+           "for cartoons and anime."));
+    ui->verticalLayout_3->addWidget(m_showAnimeCheckBox);
+    connect(m_showAnimeCheckBox, &QCheckBox::toggled, this, [this]() { applyAnimeFilter(); });
+    applyAnimeFilter();
+}
+
+void TaskConfigDialog::applyAnimeFilter()
+{
+    const bool show = m_showAnimeCheckBox->isChecked();
+
+    auto setHidden = [](QComboBox *comboBox, int index, bool hidden) {
+        if (QListView *view = qobject_cast<QListView *>(comboBox->view())) {
+            view->setRowHidden(index, hidden);
+        }
+        if (auto *model = qobject_cast<QStandardItemModel *>(comboBox->model())) {
+            if (QStandardItem *item = model->item(index)) {
+                item->setEnabled(!hidden);
+            }
+        }
+    };
+
+    // Filters made for cartoons
+    setHidden(ui->filterSelectionComboBox, PLACEBO_MODE, !show);
+    setHidden(ui->filterSelectionComboBox, CUGAN_MODE, !show);
+    if (!show && ui->filterSelectionComboBox->currentIndex() != ESRGAN_MODE) {
+        ui->filterSelectionComboBox->setCurrentIndex(ESRGAN_MODE);
+    }
+
+    // Real-ESRGAN models made for cartoons
+    for (int i = 0; i < ui->realesrganModelComboBox->count(); i++) {
+        bool anime = ui->realesrganModelComboBox->itemData(i).toString().contains("anime");
+        setHidden(ui->realesrganModelComboBox, i, anime && !show);
+    }
+    if (!show && realesrganModelName().contains("anime")) {
+        ui->realesrganModelComboBox->setCurrentIndex(REALESRGAN_MODEL_REALESR_GENERALV3);
+    }
 }
 
 void TaskConfigDialog::applyEncoderPreset(int index)
@@ -1099,9 +1244,9 @@ std::optional<TaskConfig> TaskConfigDialog::getTaskConfig()
                                                  : -1;
             video2x::processors::RealESRGANConfig realesrgan_config;
 #ifdef _WIN32
-            realesrgan_config.model_name = ui->realesrganModelComboBox->currentText().toStdWString();
+            realesrgan_config.model_name = realesrganModelName().toStdWString();
 #else
-            realesrgan_config.model_name = ui->realesrganModelComboBox->currentText().toStdString();
+            realesrgan_config.model_name = realesrganModelName().toStdString();
 #endif
             taskConfig.procCfg.config = realesrgan_config;
             break;
@@ -1326,7 +1471,12 @@ void TaskConfigDialog::setTaskConfig(const TaskConfig &taskConfig)
 #else
             QString modelName = QString::fromStdString(realesrganConfig.model_name);
 #endif
-            ui->realesrganModelComboBox->setCurrentText(modelName);
+            {
+                int modelIndex = ui->realesrganModelComboBox->findData(modelName);
+                if (modelIndex >= 0) {
+                    ui->realesrganModelComboBox->setCurrentIndex(modelIndex);
+                }
+            }
             if (taskConfig.procCfg.noise_level >= 0) {
                 ui->noiseLevelSpinBox->setValue(taskConfig.procCfg.noise_level);
             }
@@ -1449,8 +1599,10 @@ void TaskConfigDialog::setTaskConfig(const TaskConfig &taskConfig)
         }
     }
 
-    // Clear the table first if needed
+    // Clear the table first if needed (clear() also removes the headers)
     m_customEncoderOptionsTableModel->clear();
+    m_customEncoderOptionsTableModel->setHorizontalHeaderLabels(QStringList()
+                                                                << tr("Option") << tr("Value"));
 
     // Populate from extra_opts
     for (const auto &kv : taskConfig.encCfg.extra_opts) {

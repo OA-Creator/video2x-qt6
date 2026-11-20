@@ -1,6 +1,7 @@
 #ifndef TASKCONFIGDIALOG_H
 #define TASKCONFIGDIALOG_H
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
 #include <vector>
@@ -51,6 +52,13 @@ private:
     void applyEncoderSettings(const QString &codec);
     static QString encoderDescription(const QString &codec);
     void saveSettings();
+    QString realesrganModelName() const;
+    static QString realesrganModelDescription(const QString &modelName);
+    QLabel *m_modelDescriptionLabel = nullptr;
+    bool isAnimeHidden(QComboBox *comboBox, int index) const;
+    void setupModelLabelsAndAnimeFilter();
+    void applyAnimeFilter();
+    QCheckBox *m_showAnimeCheckBox = nullptr;
     void restoreSettings();
 
     struct GpuInfo

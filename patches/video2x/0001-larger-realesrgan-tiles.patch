@@ -1,13 +1,17 @@
 diff --git a/src/filter_realesrgan.cpp b/src/filter_realesrgan.cpp
-index abfd100..752b6eb 100644
+index abfd100..9b60b93 100644
 --- a/src/filter_realesrgan.cpp
 +++ b/src/filter_realesrgan.cpp
-@@ -88,7 +88,10 @@ int FilterRealesrgan::init(AVCodecContext* dec_ctx, AVCodecContext* enc_ctx, AVB
+@@ -88,7 +88,14 @@ int FilterRealesrgan::init(AVCodecContext* dec_ctx, AVCodecContext* enc_ctx, AVB
  
      // Calculate tilesize based on GPU heap budget
      uint32_t heap_budget = ncnn::get_gpu_device(gpuid_)->get_heap_budget();
 -    if (heap_budget > 1900) {
-+    if (heap_budget > 7000) {
++    // The compact models (SRVGGNet) need little memory per tile, the large
++    // RRDB models (realesrgan-plus*) need several times more
++    bool compact_model = model_name_.find(STR("animevideov3")) != fsutils::StringType::npos ||
++                         model_name_.find(STR("generalv3")) != fsutils::StringType::npos;
++    if (compact_model && heap_budget > 7000) {
 +        // Larger tiles reduce the overlap overhead on GPUs with plenty of VRAM
 +        realesrgan_->tilesize = 400;
 +    } else if (heap_budget > 1900) {

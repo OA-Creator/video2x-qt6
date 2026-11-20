@@ -842,6 +842,41 @@ Starten Sie die Anwendung neu, damit die Änderungen wirksam werden.</translatio
     </message>
     <message>
         <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Real recordings (phone, camcorder) · fast · recommended</source>
+        <translation>Echte Aufnahmen (Handy, Camcorder) · schnell · empfohlen</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Real recordings · very strong sharpening · very slow</source>
+        <translation>Echte Aufnahmen · sehr starke Schärfung · sehr langsam</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Cartoons and anime · very fast</source>
+        <translation>Zeichentrick und Anime · sehr schnell</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Cartoons and anime · strong sharpening · slow</source>
+        <translation>Zeichentrick und Anime · starke Schärfung · langsam</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Additional model from the models folder</source>
+        <translation>Zusätzliches Modell aus dem Modellordner</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Show cartoon models</source>
+        <translation>Zeichentrick-Modelle anzeigen</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Real-CUGAN, Anime4K (libplacebo) and the anime models of Real-ESRGAN are made for cartoons and anime.</source>
+        <translation>Real-CUGAN, Anime4K (libplacebo) und die Anime-Modelle von Real-ESRGAN sind für Zeichentrick und Anime gemacht.</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
         <source>Automatic (recommended)</source>
         <translation>Automatisch (empfohlen)</translation>
     </message>
