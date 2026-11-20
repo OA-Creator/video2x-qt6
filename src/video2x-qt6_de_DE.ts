@@ -867,6 +867,40 @@ Starten Sie die Anwendung neu, damit die Änderungen wirksam werden.</translatio
     </message>
     <message>
         <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Best quality</source>
+        <translation>Beste Qualität</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Balanced (recommended)</source>
+        <translation>Ausgewogen (empfohlen)</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Fast</source>
+        <translation>Schnell</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Speed</source>
+        <translation>Tempo</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>Best quality: the AI works on the original and the result is scaled down afterwards.
+Balanced: the original is shrunk slightly first when that saves a lot of time.
+Fast: the original is always shrunk so that the AI produces exactly the final size.</source>
+        <translation>Beste Qualität: Die KI rechnet mit dem Original, das Ergebnis wird danach verkleinert.
+Ausgewogen: Das Original wird vorher leicht verkleinert, wenn das viel Zeit spart.
+Schnell: Das Original wird immer so verkleinert, dass die KI genau die Endgröße liefert.</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
+        <source>The result is smaller than the original. Is this an already upscaled video?</source>
+        <translation>Das Ergebnis wird kleiner als das Original. Ist das schon ein hochskaliertes Video?</translation>
+    </message>
+    <message>
+        <location filename="taskconfigdialog.cpp" line="1"/>
         <source>Show cartoon models</source>
         <translation>Zeichentrick-Modelle anzeigen</translation>
     </message>

@@ -526,6 +526,22 @@ void TaskConfigDialog::setupMaxResolution()
     maxResolutionLayout->addWidget(m_maxResolutionComboBox);
     ui->verticalLayout_9->addLayout(maxResolutionLayout);
 
+    // Speed: shrink the input so that the upscaled result already has the final size
+    m_speedComboBox = new QComboBox(this);
+    m_speedComboBox->addItem(tr("Best quality"));
+    m_speedComboBox->addItem(tr("Balanced (recommended)"));
+    m_speedComboBox->addItem(tr("Fast"));
+    m_speedComboBox->setCurrentIndex(1);
+    m_speedComboBox->setToolTip(
+        tr("Best quality: the AI works on the original and the result is scaled down "
+           "afterwards.\nBalanced: the original is shrunk slightly first when that saves a lot "
+           "of time.\nFast: the original is always shrunk so that the AI produces exactly the "
+           "final size."));
+    QHBoxLayout *speedLayout = new QHBoxLayout();
+    speedLayout->addWidget(new QLabel(tr("Speed"), this));
+    speedLayout->addWidget(m_speedComboBox);
+    ui->verticalLayout_9->addLayout(speedLayout);
+
     m_outputPreviewLabel = new QLabel(this);
     m_outputPreviewLabel->setTextFormat(Qt::RichText);
     m_outputPreviewLabel->setWordWrap(true);
@@ -535,6 +551,7 @@ void TaskConfigDialog::setupMaxResolution()
 
     auto update = [this]() { updateOutputPreview(); };
     connect(m_maxResolutionComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, update);
+    connect(m_speedComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged), this, update);
     connect(ui->scalingFactorSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, update);
     connect(ui->outputWidthSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, update);
     connect(ui->outputHeightSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, update);
@@ -552,13 +569,6 @@ void TaskConfigDialog::updateOutputPreview()
     }
 
     auto sizeText = [](int w, int h) { return QString("%1 × %2").arg(w).arg(h); };
-    // Halfway between text and background, readable in light and dark mode
-    const QColor textColor = palette().color(QPalette::WindowText);
-    const QColor windowColor = palette().color(QPalette::Window);
-    const QString mutedColor = QColor((textColor.red() + windowColor.red()) / 2,
-                                      (textColor.green() + windowColor.green()) / 2,
-                                      (textColor.blue() + windowColor.blue()) / 2)
-                                   .name();
     const QSize maxSize = m_maxResolutionComboBox->currentData().toSize();
 
     // Size produced by the selected filter for the given input size
@@ -603,13 +613,27 @@ void TaskConfigDialog::updateOutputPreview()
         }
     }
 
+    // The faster modes shrink the input so that the AI produces exactly the final size
+    int speedMode = m_speedComboBox->currentIndex();
+    int factor = ui->scalingFactorSpinBox->value();
+    bool canShrink = ui->filterSelectionComboBox->currentIndex() == ESRGAN_MODE
+                     || ui->filterSelectionComboBox->currentIndex() == CUGAN_MODE;
+    if (speedMode > 0 && canShrink && factor > 1
+        && (finalWidth != processed.width() || finalHeight != processed.height())) {
+        int idealWidth = (std::max)(2, finalWidth / factor);
+        int idealHeight = (std::max)(2, finalHeight / factor);
+        double ratio = static_cast<double>(idealWidth) / m_inputWidth;
+        if (ratio < 1.0 && (speedMode >= 2 || ratio >= 0.7)) {
+            finalWidth = idealWidth * factor;
+            finalHeight = idealHeight * factor;
+        }
+    }
+
     // Show the sizes the way the video is displayed
     int inW = m_inputWidth, inH = m_inputHeight;
-    int procW = processed.width(), procH = processed.height();
     int outW = finalWidth, outH = finalHeight;
     if (m_inputRotated) {
         std::swap(inW, inH);
-        std::swap(procW, procH);
         std::swap(outW, outH);
     }
 
@@ -621,18 +645,11 @@ void TaskConfigDialog::updateOutputPreview()
     QString text = QString("<b>%1</b><br>%2 &nbsp;→&nbsp; <b>%3</b>")
                        .arg(fileName, sizeText(inW, inH), sizeText(outW, outH));
 
-    bool noBenefit = outW <= inW && outH <= inH;
-    if (!noBenefit && (procW != outW || procH != outH)) {
-        text += QString("<br><span style=\"color:%1\">%2</span>")
-                    .arg(mutedColor,
-                         tr("Upscaled to %1, then scaled down to the maximum resolution.")
-                             .arg(sizeText(procW, procH)));
-    }
-
-    if (noBenefit) {
-        text += QString("<br><span style=\"color:#d97706\">%1</span>")
-                    .arg(tr("The resolution stays the same. The AI still sharpens and denoises the "
-                            "picture, but needs the full processing time for it."));
+    // Warn when the result gets smaller than the original, e.g. an already upscaled video
+    if (outW < inW || outH < inH) {
+        text += QString("<br><span style=\"color:#dc2626\">%1</span>")
+                    .arg(tr("The result is smaller than the original. Is this an already "
+                            "upscaled video?"));
     }
 
     m_outputPreviewLabel->setText(text);
@@ -873,6 +890,7 @@ void TaskConfigDialog::saveSettings()
     settings.setValue("noiseLevel", ui->noiseLevelSpinBox->value());
     settings.setValue("frameRateMultiplier", ui->frameRateMultiplierSpinBox->value());
     settings.setValue("maxResolution", m_maxResolutionComboBox->currentIndex());
+    settings.setValue("speed", m_speedComboBox->currentIndex());
     settings.setValue("encoderPreset", m_encoderPresetComboBox->currentIndex());
     settings.setValue("codec", ui->codecLineEdit->text());
     settings.setValue("bitRate", ui->bitRateSpinBox->value());
@@ -941,6 +959,11 @@ void TaskConfigDialog::restoreSettings()
         m_maxResolutionComboBox->setCurrentIndex(maxResolution);
     }
 
+    int speed = settings.value("speed", 1).toInt();
+    if (speed >= 0 && speed < m_speedComboBox->count()) {
+        m_speedComboBox->setCurrentIndex(speed);
+    }
+
     int preset = settings.value("encoderPreset", ENCODER_PRESET_AUTO).toInt();
     if (preset < 0 || preset >= m_encoderPresetComboBox->count()) {
         preset = ENCODER_PRESET_AUTO;
@@ -986,8 +1009,8 @@ QString TaskConfigDialog::realesrganModelDescription(const QString &modelName)
 
 QString TaskConfigDialog::realesrganModelName() const
 {
-    QVariant data = ui->realesrganModelComboBox->currentData();
-    return data.isValid() ? data.toString() : ui->realesrganModelComboBox->currentText();
+    QVariant modelData = ui->realesrganModelComboBox->currentData();
+    return modelData.isValid() ? modelData.toString() : ui->realesrganModelComboBox->currentText();
 }
 
 bool TaskConfigDialog::isAnimeHidden(QComboBox *comboBox, int index) const
@@ -1184,6 +1207,7 @@ std::optional<TaskConfig> TaskConfigDialog::getTaskConfig()
         QSize maxSize = m_maxResolutionComboBox->currentData().toSize();
         taskConfig.procCfg.max_width = maxSize.width();
         taskConfig.procCfg.max_height = maxSize.height();
+        taskConfig.procCfg.speed_mode = m_speedComboBox->currentIndex();
     }
 
     // Processing mode selection
@@ -1386,6 +1410,12 @@ void TaskConfigDialog::setTaskConfig(const TaskConfig &taskConfig)
     // vkDeviceIndex
     ui->vulkanDeviceSelectionComboBox->setCurrentIndex(taskConfig.vkDeviceIndex);
     m_gpuWorkersSpinBox->setValue(taskConfig.gpuWorkers);
+
+    // Speed
+    if (taskConfig.procCfg.speed_mode >= 0
+        && taskConfig.procCfg.speed_mode < m_speedComboBox->count()) {
+        m_speedComboBox->setCurrentIndex(taskConfig.procCfg.speed_mode);
+    }
 
     // Maximum output resolution
     if (taskConfig.procCfg.max_width > 0 && taskConfig.procCfg.max_height > 0) {

@@ -80,6 +80,7 @@ private:
     QComboBox *m_encoderPresetComboBox = nullptr;
     QSpinBox *m_gpuWorkersSpinBox = nullptr;
     QComboBox *m_maxResolutionComboBox = nullptr;
+    QComboBox *m_speedComboBox = nullptr;
     QLabel *m_outputPreviewLabel = nullptr;
     QStringList m_inputFiles;
     int m_inputWidth = 0;

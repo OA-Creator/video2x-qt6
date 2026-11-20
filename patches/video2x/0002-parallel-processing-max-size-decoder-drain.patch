@@ -17,7 +17,7 @@ index bb9423c..a21af62 100644
  ncnn::Mat avframe_to_ncnn_mat(AVFrame* frame);
  
 diff --git a/include/libvideo2x/libvideo2x.h b/include/libvideo2x/libvideo2x.h
-index 9abb2a8..5ba71ed 100644
+index 9abb2a8..dd9f845 100644
 --- a/include/libvideo2x/libvideo2x.h
 +++ b/include/libvideo2x/libvideo2x.h
 @@ -3,6 +3,8 @@
@@ -49,27 +49,37 @@ index 9abb2a8..5ba71ed 100644
      [[nodiscard]] int write_frame(AVFrame* frame, encoder::Encoder& encoder);
  
      [[nodiscard]] inline int write_raw_packet(
-@@ -89,6 +104,9 @@ class LIBVIDEO2X_API VideoProcessor {
+@@ -89,6 +104,16 @@ class LIBVIDEO2X_API VideoProcessor {
      std::atomic<VideoProcessorState> state_ = VideoProcessorState::Idle;
      std::atomic<int64_t> frame_idx_ = 0;
      std::atomic<int64_t> total_frames_ = 0;
 +
 +    // Serializes writes to the output muxer when frames are processed in parallel
 +    std::mutex mux_mutex_;
++
++    // Size the input frames are shrunk to before upscaling (0 = keep)
++    int prescale_width_ = 0;
++    int prescale_height_ = 0;
++
++    // Returns a shrunk copy of the frame, or nullptr if it is not needed
++    AVFrame* prescale_frame(AVFrame* frame) const;
  };
  
  }  // namespace video2x
 diff --git a/include/libvideo2x/processor.h b/include/libvideo2x/processor.h
-index f60b552..ee76397 100644
+index f60b552..d368654 100644
 --- a/include/libvideo2x/processor.h
 +++ b/include/libvideo2x/processor.h
-@@ -60,6 +60,9 @@ struct ProcessorConfig {
+@@ -60,6 +60,12 @@ struct ProcessorConfig {
      int noise_level = -1;
      int frm_rate_mul = 0;
      float scn_det_thresh = 0.0f;
 +    // Largest output size (0 = no limit). The box is turned for portrait videos.
 +    int max_width = 0;
 +    int max_height = 0;
++    // 0 = best quality, 1 = balanced, 2 = fast: shrink the input so that the
++    // upscaled result already has the final size instead of scaling it down afterwards
++    int speed_mode = 0;
      std::variant<LibplaceboConfig, RealESRGANConfig, RealCUGANConfig, RIFEConfig> config;
  };
  
@@ -251,7 +261,7 @@ index cb735d5..78e951d 100644
      out_vstream->time_base = enc_ctx_->time_base;
      out_vstream->avg_frame_rate = enc_ctx_->framerate;
 diff --git a/src/libvideo2x.cpp b/src/libvideo2x.cpp
-index c259ed0..5654c71 100644
+index c259ed0..abdfafb 100644
 --- a/src/libvideo2x.cpp
 +++ b/src/libvideo2x.cpp
 @@ -6,7 +6,16 @@ extern "C" {
@@ -349,7 +359,7 @@ index c259ed0..5654c71 100644
  VideoProcessor::VideoProcessor(
      const processors::ProcessorConfig proc_cfg,
      const encoder::EncoderConfig enc_cfg,
-@@ -93,6 +173,21 @@ int VideoProcessor::process(
+@@ -93,6 +173,49 @@ int VideoProcessor::process(
          return handle_error(-1, "Failed to determine the output dimensions");
      }
  
@@ -368,10 +378,38 @@ index c259ed0..5654c71 100644
 +        );
 +    }
 +
++    // Faster modes: shrink the input so that the upscaled result already has the final size
++    prescale_width_ = 0;
++    prescale_height_ = 0;
++    bool can_prescale = proc_cfg_.processor_type == processors::ProcessorType::RealESRGAN ||
++                        proc_cfg_.processor_type == processors::ProcessorType::RealCUGAN;
++    if (proc_cfg_.speed_mode > 0 && can_prescale && proc_cfg_.scaling_factor > 1 &&
++        (output_width != processed_width || output_height != processed_height)) {
++        int ideal_width = (std::max)(2, output_width / proc_cfg_.scaling_factor);
++        int ideal_height = (std::max)(2, output_height / proc_cfg_.scaling_factor);
++        double ratio = static_cast<double>(ideal_width) / dec_ctx->width;
++        // Balanced only shrinks a little, fast always shrinks
++        if (ratio < 1.0 && (proc_cfg_.speed_mode >= 2 || ratio >= 0.7)) {
++            prescale_width_ = ideal_width;
++            prescale_height_ = ideal_height;
++            output_width = ideal_width * proc_cfg_.scaling_factor;
++            output_height = ideal_height * proc_cfg_.scaling_factor;
++            logger()->info(
++                "Input {}x{} is shrunk to {}x{} before upscaling to {}x{}",
++                dec_ctx->width,
++                dec_ctx->height,
++                prescale_width_,
++                prescale_height_,
++                output_width,
++                output_height
++            );
++        }
++    }
++
      // Initialize the encoder
      encoder::Encoder encoder;
      ret = encoder.init(
-@@ -116,8 +211,34 @@ int VideoProcessor::process(
+@@ -116,8 +239,34 @@ int VideoProcessor::process(
          return handle_error(ret, "Failed to initialize filter");
      }
  
@@ -407,7 +445,7 @@ index c259ed0..5654c71 100644
      if (ret < 0) {
          return handle_error(ret, "Error processing frames");
      }
-@@ -198,19 +319,20 @@ int VideoProcessor::process_frames(
+@@ -198,19 +347,20 @@ int VideoProcessor::process_frames(
      // Read frames from the input file
      while (state_.load() != VideoProcessorState::Aborted) {
          ret = av_read_frame(ifmt_ctx, packet.get());
@@ -435,7 +473,7 @@ index c259ed0..5654c71 100644
              if (ret < 0) {
                  av_strerror(ret, errbuf, sizeof(errbuf));
                  logger()->critical("Error sending packet to decoder: {}", errbuf);
-@@ -227,8 +349,9 @@ int VideoProcessor::process_frames(
+@@ -227,8 +377,9 @@ int VideoProcessor::process_frames(
  
                  // Receive the decoded frame from the decoder
                  ret = avcodec_receive_frame(dec_ctx, frame.get());
@@ -446,7 +484,7 @@ index c259ed0..5654c71 100644
                      break;
                  } else if (ret < 0) {
                      av_strerror(ret, errbuf, sizeof(errbuf));
-@@ -274,6 +397,9 @@ int VideoProcessor::process_frames(
+@@ -274,6 +425,9 @@ int VideoProcessor::process_frames(
              }
          }
          av_packet_unref(packet.get());
@@ -456,7 +494,7 @@ index c259ed0..5654c71 100644
      }
  
      // Flush the processor
-@@ -311,11 +437,377 @@ int VideoProcessor::process_frames(
+@@ -311,11 +465,396 @@ int VideoProcessor::process_frames(
      return ret;
  }
  
@@ -474,6 +512,15 @@ index c259ed0..5654c71 100644
 +
 +    if (processor->get_processing_mode() == processors::ProcessingMode::Filter) {
 +        processors::Filter* filter = static_cast<processors::Filter*>(processor);
++
++        // Shrink the input first in the faster modes
++        std::unique_ptr<AVFrame, decltype(&avutils::av_frame_deleter)> prescaled(
++            prescale_frame(frame), &avutils::av_frame_deleter
++        );
++        if (prescaled != nullptr) {
++            frame = prescaled.get();
++        }
++
 +        AVFrame* proc_frame = nullptr;
 +        ret = filter->filter(frame, &proc_frame);
 +        if (ret < 0 && ret != AVERROR(EAGAIN)) {
@@ -810,6 +857,16 @@ index c259ed0..5654c71 100644
 +    return 0;
 +}
 +
++AVFrame* VideoProcessor::prescale_frame(AVFrame* frame) const {
++    if (prescale_width_ <= 0 || prescale_height_ <= 0 || frame->hw_frames_ctx != nullptr ||
++        (frame->width == prescale_width_ && frame->height == prescale_height_)) {
++        return nullptr;
++    }
++    return conversions::scale_avframe(
++        frame, prescale_width_, prescale_height_, static_cast<AVPixelFormat>(frame->format)
++    );
++}
++
  int VideoProcessor::write_frame(AVFrame* frame, encoder::Encoder& encoder) {
      char errbuf[AV_ERROR_MAX_STRING_SIZE];
      int ret = 0;
@@ -834,11 +891,26 @@ index c259ed0..5654c71 100644
          ret = encoder.write_frame(frame, frame_idx_.load());
          if (ret < 0) {
              av_strerror(ret, errbuf, sizeof(errbuf));
+@@ -361,6 +900,14 @@ int VideoProcessor::process_filtering(
+     // Cast the processor to a Filter
+     processors::Filter* filter = static_cast<processors::Filter*>(processor.get());
+ 
++    // Shrink the input first in the faster modes
++    std::unique_ptr<AVFrame, decltype(&avutils::av_frame_deleter)> prescaled(
++        prescale_frame(frame), &avutils::av_frame_deleter
++    );
++    if (prescaled != nullptr) {
++        frame = prescaled.get();
++    }
++
+     // Process the frame using the filter
+     ret = filter->filter(frame, &proc_frame);
+ 
 diff --git a/tools/video2x/src/argparse.cpp b/tools/video2x/src/argparse.cpp
-index e0e7931..24e52a5 100644
+index e0e7931..e213815 100644
 --- a/tools/video2x/src/argparse.cpp
 +++ b/tools/video2x/src/argparse.cpp
-@@ -137,6 +137,10 @@ int parse_args(
+@@ -137,6 +137,12 @@ int parse_args(
                  ->notifier([](int v) { validate_min(v, "scaling-factor", 2); }), "Scaling factor")
              ("noise-level,n", po::value<int>(&proc_cfg.noise_level)
                  ->notifier([](int v) { validate_min(v, "noise-level", -1); }), "Noise level")
@@ -846,6 +918,8 @@ index e0e7931..24e52a5 100644
 +                "Largest output width, larger results are scaled down (0 = no limit)")
 +            ("max-height", po::value<int>(&proc_cfg.max_height)->default_value(0),
 +                "Largest output height, larger results are scaled down (0 = no limit)")
++            ("speed-mode", po::value<int>(&proc_cfg.speed_mode)->default_value(0),
++                "0 = best quality, 1 = balanced, 2 = fast (shrink the input first)")
          ;
  
          po::options_description interp_opts("Frame interpolation options");
