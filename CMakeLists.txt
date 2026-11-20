@@ -157,6 +157,8 @@ set(PROJECT_SOURCES
     src/preferencesmanager.cpp
     src/preferencesmanager.h
     src/qttexteditsink.cpp
+    src/simpleview.cpp
+    src/simpleview.h
     src/qttexteditsink.h
     src/taskconfig.h
     src/taskconfigdialog.cpp

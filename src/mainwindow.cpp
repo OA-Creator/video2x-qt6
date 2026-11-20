@@ -12,6 +12,8 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QThread>
+#include <QFileInfo>
+#include <QStackedWidget>
 #include <QTimer>
 #include <QUrl>
 #include <QVersionNumber>
@@ -31,6 +33,7 @@ extern "C" {
 #include <vulkan/vulkan.h>
 
 #include "aboutdialog.h"
+#include "simpleview.h"
 #include "filedroptableview.h"
 #include "preferencesdialog.h"
 #include "qttexteditsink.h"
@@ -60,7 +63,7 @@ MainWindow::MainWindow(QWidget *parent)
     video2x::logger()->info("Initializing Video2X Qt6 {}", LIBVIDEO2X_VERSION_STRING);
 
     // Dynamically set the Window title + library version
-    setWindowTitle("Video2X Qt6 " + QString::fromUtf8(LIBVIDEO2X_VERSION_STRING));
+    setWindowTitle("OliVision");
     ui->statusbar->showMessage(tr("Status: ") + tr("idle"));
 
     // Set default component visibility
@@ -92,6 +95,7 @@ MainWindow::MainWindow(QWidget *parent)
         ui->startPushButton->setVisible(false);
         ui->pausePushButton->setVisible(true);
         ui->abortPushButton->setVisible(true);
+        m_simpleView->setRunning(true, false);
 
         if (m_prefManager.getPreferences().autoShowStats) {
             ui->statsFrame->setVisible(true);
@@ -102,6 +106,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(this, &MainWindow::processingPaused, this, [this]() {
         ui->pausePushButton->setVisible(false);
         ui->resumePushButton->setVisible(true);
+        m_simpleView->setRunning(true, true);
+        m_simpleView->setCardState(m_currentVideoIndex, SimpleView::CardState::Paused);
 
         QProgressBar *progressBar = getCurrentProgressBar();
         if (progressBar != nullptr) {
@@ -116,6 +122,8 @@ MainWindow::MainWindow(QWidget *parent)
     connect(this, &MainWindow::processingResumed, this, [this]() {
         ui->resumePushButton->setVisible(false);
         ui->pausePushButton->setVisible(true);
+        m_simpleView->setRunning(true, false);
+        m_simpleView->setCardState(m_currentVideoIndex, SimpleView::CardState::Running);
 
         QProgressBar *progressBar = getCurrentProgressBar();
         if (progressBar != nullptr) {
@@ -177,6 +185,7 @@ MainWindow::MainWindow(QWidget *parent)
         ui->resumePushButton->setVisible(false);
         ui->abortPushButton->setVisible(false);
         ui->startPushButton->setVisible(true);
+        m_simpleView->setRunning(false, false);
 
         ui->statusbar->showMessage(tr("Status: ") + tr("idle"));
     });
@@ -187,6 +196,14 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Initialize translator
     changeLanguage(pref.translation);
+
+    // OliVision does not check for Video2X updates: an update from the original project
+    // would replace OliVision
+    if (!pref.checkUpdates.has_value() || pref.checkUpdates.value()) {
+        pref.checkUpdates = false;
+        m_prefManager.setPreferences(pref);
+        m_prefManager.savePreferences();
+    }
 
     // Ask the user if the application should prompt for updates
     if (!pref.checkUpdates.has_value()) {
@@ -215,6 +232,9 @@ MainWindow::MainWindow(QWidget *parent)
     m_taskTableModel = new QStandardItemModel(this);
     updateTaskTableHeaders();
     ui->tasksTableView->setModel(m_taskTableModel);
+
+    // The simple OliVision view is the main view
+    setupSimpleView();
 
     // Set table column width after initialization completes
     QTimer::singleShot(0, this, [this]() {
@@ -285,7 +305,9 @@ void MainWindow::on_actionReportBugs_triggered()
 void MainWindow::on_actionAbout_triggered()
 {
     AboutDialog aboutDialog(this);
-    aboutDialog.setVersionString("Video2X Qt6 " + QString::fromUtf8(LIBVIDEO2X_VERSION_STRING));
+    aboutDialog.setVersionString("OliVision · " + tr("based on Video2X Qt6 %1")
+                                                      .arg(QString::fromUtf8(
+                                                          LIBVIDEO2X_VERSION_STRING)));
     aboutDialog.exec();
 }
 
@@ -580,139 +602,152 @@ void MainWindow::addFilesWithConfig(const QStringList &fileNames)
 
     // Add each file into the table and attach the TaskConfig
     for (const QString &fileName : fileNames) {
-        // Check if this file is already in the model
-        bool alreadyExists = false;
-        for (int row = 0; row < m_taskTableModel->rowCount(); ++row) {
-            QStandardItem *existingItem = m_taskTableModel->item(row, 0);
-            if (existingItem && existingItem->text() == fileName) {
-                alreadyExists = true;
-                break;
-            }
-        }
-
-        if (alreadyExists) {
-            continue;
-        }
-
-// Set the input file name to the selected file
-#ifdef _WIN32
-        taskConfig.inFname = std::filesystem::path(fileName.toStdWString());
-        QStandardItem *fileNameItem = new QStandardItem(
-            QString::fromStdWString(taskConfig.inFname.filename().wstring()));
-#else
-        taskConfig.inFname = std::filesystem::path(fileName.toStdString());
-        QStandardItem *fileNameItem = new QStandardItem(
-            QString::fromStdString(taskConfig.inFname.filename().string()));
-
-#endif
-
-        // Create items for each column
-        QStandardItem *processorItem = new QStandardItem(
-            convertProcessorTypeToQString(taskConfig.procCfg.processor_type));
-        QStandardItem *progressItem = new QStandardItem("0%");
-        QStandardItem *editItem = new QStandardItem("Edit");
-
-        // Append the row
-        m_taskTableModel->appendRow({fileNameItem, processorItem, progressItem, editItem});
-
-        // Store the TaskConfigs object in the first column's item using a custom role
-        fileNameItem->setData(QVariant::fromValue(taskConfig), Qt::UserRole + 1);
-
-        // Get the current row's persistent index
-        QPersistentModelIndex persistentIndex(
-            m_taskTableModel->index(m_taskTableModel->rowCount() - 1, 0));
-
-        // Add progress bar
-        QModelIndex progressIndex = m_taskTableModel->index(m_taskTableModel->rowCount() - 1,
-                                                            PROGRESS_BAR_COLUMN);
-        QProgressBar *progressBar = new QProgressBar(ui->tasksTableView);
-        setDefaultProgressBarStyle(progressBar);
-        ui->tasksTableView->setIndexWidget(progressIndex, progressBar);
-
-        // Create an edit button
-        QModelIndex editIndex = m_taskTableModel->index(m_taskTableModel->rowCount() - 1,
-                                                        EDIT_BUTTON_COLUMN);
-        QPushButton *editButton = new QPushButton(ui->tasksTableView);
-        editButton->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::MailMessageNew));
-        editButton->setIconSize(QSize(14, 14));
-        editButton->setFocusPolicy(Qt::NoFocus);
-
-        // Add the edit button to the table
-        ui->tasksTableView->setIndexWidget(editIndex, editButton);
-
-        // Create a delete button
-        QModelIndex deleteIndex = m_taskTableModel->index(m_taskTableModel->rowCount() - 1,
-                                                          DELETE_BUTTON_COLUMN);
-        QPushButton *deleteButton = new QPushButton(ui->tasksTableView);
-        deleteButton->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::EditDelete));
-        deleteButton->setIconSize(QSize(14, 14));
-        deleteButton->setFocusPolicy(Qt::NoFocus);
-
-        // Add the delete button to the table
-        ui->tasksTableView->setIndexWidget(deleteIndex, deleteButton);
-
-        // Connect the edit button with an edit function
-        connect(editButton, &QPushButton::clicked, this, [this, persistentIndex]() {
-            if (!persistentIndex.isValid()) {
-                return;
-            }
-
-            QStandardItem *item = m_taskTableModel->item(persistentIndex.row(), 0);
-            if (item == nullptr) {
-                return;
-            }
-            QVariant var = item->data(Qt::UserRole + 1);
-            if (var.isValid()) {
-                // Open the dialog again for editing
-                TaskConfigDialog editDialog(this);
-                editDialog.setWindowTitle(tr("Edit Task"));
-
-                TaskConfig originalTaskConfig = var.value<TaskConfig>();
-                editDialog.setTaskConfig(originalTaskConfig);
-
-                // Do not apply anything if the user clickec cancel
-                if (editDialog.exec() != QDialog::Accepted) {
-                    return;
-                }
-
-                // Parse the GUI option into a TaskConfig
-                auto updatedTaskOpt = editDialog.getTaskConfig();
-                if (!updatedTaskOpt.has_value()) {
-                    execErrorMessage(tr("Failed to parse task configs."));
-                    return;
-                }
-                TaskConfig updatedTask = updatedTaskOpt.value();
-                updatedTask.inFname = originalTaskConfig.inFname;
-                updatedTask.outFname = originalTaskConfig.outFname;
-
-                // Update the processor column
-                m_taskTableModel->item(persistentIndex.row(), PROCESSOR_COLUMN)
-                    ->setText(convertProcessorTypeToQString(updatedTask.procCfg.processor_type));
-
-                // Store updated task
-                item->setData(QVariant::fromValue(updatedTask), Qt::UserRole + 1);
-            }
-        });
-
-        // Connect the delete button with a deletion function
-        connect(deleteButton, &QPushButton::clicked, this, [this, persistentIndex]() {
-            if (!persistentIndex.isValid()) {
-                return;
-            }
-
-            int rowIndex = persistentIndex.row();
-            m_taskTableModel->removeRow(rowIndex);
-
-            if (rowIndex < m_currentVideoIndex) {
-                m_currentVideoIndex -= 1;
-            }
-        });
+        addTaskRow(fileName, taskConfig);
     }
 
     // Increase the total number of tasks
     if (m_procStarted) {
         ui->overallProgressBar->setMaximum(ui->overallProgressBar->maximum() + fileNames.count());
     }
+}
+
+bool MainWindow::addTaskRow(const QString &fileName, TaskConfig taskConfig)
+{
+    // Check if this file is already in the model
+    bool alreadyExists = false;
+    for (int row = 0; row < m_taskTableModel->rowCount(); ++row) {
+        QStandardItem *existingItem = m_taskTableModel->item(row, 0);
+        if (existingItem == nullptr) {
+            continue;
+        }
+        QVariant existing = existingItem->data(Qt::UserRole + 1);
+        if (existing.isValid()
+            && QFileInfo(pathToQString(existing.value<TaskConfig>().inFname))
+                   == QFileInfo(fileName)) {
+            alreadyExists = true;
+            break;
+        }
+    }
+
+    if (alreadyExists) {
+        return false;
+    }
+
+// Set the input file name to the selected file
+#ifdef _WIN32
+    taskConfig.inFname = std::filesystem::path(fileName.toStdWString());
+    QStandardItem *fileNameItem = new QStandardItem(
+        QString::fromStdWString(taskConfig.inFname.filename().wstring()));
+#else
+    taskConfig.inFname = std::filesystem::path(fileName.toStdString());
+    QStandardItem *fileNameItem = new QStandardItem(
+        QString::fromStdString(taskConfig.inFname.filename().string()));
+
+#endif
+
+    // Create items for each column
+    QStandardItem *processorItem = new QStandardItem(
+        convertProcessorTypeToQString(taskConfig.procCfg.processor_type));
+    QStandardItem *progressItem = new QStandardItem("0%");
+    QStandardItem *editItem = new QStandardItem("Edit");
+
+    // Append the row
+    m_taskTableModel->appendRow({fileNameItem, processorItem, progressItem, editItem});
+
+    // Store the TaskConfigs object in the first column's item using a custom role
+    fileNameItem->setData(QVariant::fromValue(taskConfig), Qt::UserRole + 1);
+
+    // Get the current row's persistent index
+    QPersistentModelIndex persistentIndex(
+        m_taskTableModel->index(m_taskTableModel->rowCount() - 1, 0));
+
+    // Add progress bar
+    QModelIndex progressIndex = m_taskTableModel->index(m_taskTableModel->rowCount() - 1,
+                                                        PROGRESS_BAR_COLUMN);
+    QProgressBar *progressBar = new QProgressBar(ui->tasksTableView);
+    setDefaultProgressBarStyle(progressBar);
+    ui->tasksTableView->setIndexWidget(progressIndex, progressBar);
+
+    // Create an edit button
+    QModelIndex editIndex = m_taskTableModel->index(m_taskTableModel->rowCount() - 1,
+                                                    EDIT_BUTTON_COLUMN);
+    QPushButton *editButton = new QPushButton(ui->tasksTableView);
+    editButton->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::MailMessageNew));
+    editButton->setIconSize(QSize(14, 14));
+    editButton->setFocusPolicy(Qt::NoFocus);
+
+    // Add the edit button to the table
+    ui->tasksTableView->setIndexWidget(editIndex, editButton);
+
+    // Create a delete button
+    QModelIndex deleteIndex = m_taskTableModel->index(m_taskTableModel->rowCount() - 1,
+                                                      DELETE_BUTTON_COLUMN);
+    QPushButton *deleteButton = new QPushButton(ui->tasksTableView);
+    deleteButton->setIcon(QIcon::fromTheme(QIcon::ThemeIcon::EditDelete));
+    deleteButton->setIconSize(QSize(14, 14));
+    deleteButton->setFocusPolicy(Qt::NoFocus);
+
+    // Add the delete button to the table
+    ui->tasksTableView->setIndexWidget(deleteIndex, deleteButton);
+
+    // Connect the edit button with an edit function
+    connect(editButton, &QPushButton::clicked, this, [this, persistentIndex]() {
+        if (!persistentIndex.isValid()) {
+            return;
+        }
+
+        QStandardItem *item = m_taskTableModel->item(persistentIndex.row(), 0);
+        if (item == nullptr) {
+            return;
+        }
+        QVariant var = item->data(Qt::UserRole + 1);
+        if (var.isValid()) {
+            // Open the dialog again for editing
+            TaskConfigDialog editDialog(this);
+            editDialog.setWindowTitle(tr("Edit Task"));
+
+            TaskConfig originalTaskConfig = var.value<TaskConfig>();
+            editDialog.setTaskConfig(originalTaskConfig);
+
+            // Do not apply anything if the user clickec cancel
+            if (editDialog.exec() != QDialog::Accepted) {
+                return;
+            }
+
+            // Parse the GUI option into a TaskConfig
+            auto updatedTaskOpt = editDialog.getTaskConfig();
+            if (!updatedTaskOpt.has_value()) {
+                execErrorMessage(tr("Failed to parse task configs."));
+                return;
+            }
+            TaskConfig updatedTask = updatedTaskOpt.value();
+            updatedTask.inFname = originalTaskConfig.inFname;
+            updatedTask.outFname = originalTaskConfig.outFname;
+
+            // Update the processor column
+            m_taskTableModel->item(persistentIndex.row(), PROCESSOR_COLUMN)
+                ->setText(convertProcessorTypeToQString(updatedTask.procCfg.processor_type));
+
+            // Store updated task
+            item->setData(QVariant::fromValue(updatedTask), Qt::UserRole + 1);
+        }
+    });
+
+    // Connect the delete button with a deletion function
+    connect(deleteButton, &QPushButton::clicked, this, [this, persistentIndex]() {
+        if (!persistentIndex.isValid()) {
+            return;
+        }
+
+        int rowIndex = persistentIndex.row();
+        m_taskTableModel->removeRow(rowIndex);
+
+        if (rowIndex < m_currentVideoIndex) {
+            m_currentVideoIndex -= 1;
+        }
+    });
+
+    return true;
 }
 
 void MainWindow::addTasks()
@@ -879,6 +914,18 @@ void MainWindow::on_videoProcessingFinished(bool retValue, std::filesystem::path
     getCurrentEditButton()->setEnabled(true);
     getCurrentDeleteButton()->setEnabled(true);
 
+    // Show the result on the card and remember finished videos so they are not processed again
+    if (m_procAborted) {
+        m_simpleView->setCardState(m_currentVideoIndex, SimpleView::CardState::Aborted);
+    } else if (retValue != 0) {
+        m_simpleView->setCardState(m_currentVideoIndex, SimpleView::CardState::Failed);
+    } else {
+        m_simpleView->setCardState(m_currentVideoIndex, SimpleView::CardState::Done);
+        if (QStandardItem *doneItem = m_taskTableModel->item(m_currentVideoIndex, 0)) {
+            doneItem->setData(true, Qt::UserRole + 2);
+        }
+    }
+
     // Update the overall progress bar
     ui->overallProgressBar->setValue(ui->overallProgressBar->value() + 1);
 
@@ -998,10 +1045,38 @@ void MainWindow::on_progressUpdate(int totalFrames, int processedFrames)
 
     // Set the text for the time remaining label
     ui->timeRemainingLabel->setText(remainingString);
+
+    // Simple view: plain remaining time
+    QString simpleRemaining;
+    if (processedFrames <= 0 || totalFrames <= 0) {
+        simpleRemaining = tr("determining...");
+    } else {
+        int remainingMinutes = static_cast<int>(remainingMilliseconds / 60000.0 + 0.5);
+        if (remainingMinutes < 1) {
+            simpleRemaining = tr("less than 1 min. left");
+        } else if (remainingMinutes < 60) {
+            simpleRemaining = tr("%1 min. left").arg(remainingMinutes);
+        } else {
+            simpleRemaining = tr("%1 h %2 min. left")
+                                  .arg(remainingMinutes / 60)
+                                  .arg(remainingMinutes % 60);
+        }
+    }
+    m_simpleView->setCardProgress(m_currentVideoIndex, processedFrames, totalFrames, simpleRemaining);
 }
 
 void MainWindow::processNextVideo()
 {
+    // Skip videos that were already finished in an earlier run
+    while (m_currentVideoIndex < m_taskTableModel->rowCount()) {
+        QStandardItem *doneItem = m_taskTableModel->item(m_currentVideoIndex, 0);
+        if (doneItem == nullptr || !doneItem->data(Qt::UserRole + 2).toBool()) {
+            break;
+        }
+        ui->overallProgressBar->setValue(ui->overallProgressBar->value() + 1);
+        m_currentVideoIndex++;
+    }
+
     // Check if we have reached the end of the tasks or if the process was aborted
     if (m_procAborted || m_currentVideoIndex >= m_taskTableModel->rowCount()) {
         // Video processing ended
@@ -1021,6 +1096,9 @@ void MainWindow::processNextVideo()
 
     getCurrentEditButton()->setEnabled(false);
     getCurrentDeleteButton()->setEnabled(false);
+    m_simpleView->setCardState(m_currentVideoIndex,
+                               SimpleView::CardState::Running,
+                               tr("determining..."));
 
     // Start timer
     m_timer.start();
@@ -1083,4 +1161,159 @@ void MainWindow::processNextVideo()
 
     // Start the thread
     workerThread->start();
+}
+
+QString MainWindow::pathToQString(const std::filesystem::path &path)
+{
+#ifdef _WIN32
+    return QString::fromStdWString(path.wstring());
+#else
+    return QString::fromStdString(path.string());
+#endif
+}
+
+void MainWindow::setupSimpleView()
+{
+    m_simpleView = new SimpleView(this);
+
+    // Keep the classic view as a hidden page, it still holds the task table
+    QWidget *classicView = takeCentralWidget();
+    m_viewStack = new QStackedWidget(this);
+    m_viewStack->addWidget(m_simpleView);
+    m_viewStack->addWidget(classicView);
+    setCentralWidget(m_viewStack);
+    m_viewStack->setCurrentWidget(m_simpleView);
+
+    menuBar()->hide();
+    ui->toolBar->hide();
+    statusBar()->hide();
+    resize(980, 640);
+
+    // Show the graphics card in the header
+    {
+        TaskConfigDialog probe(this);
+        m_simpleView->setGpuName(probe.selectedGpuName());
+    }
+
+    connect(m_simpleView, &SimpleView::filesDropped, this, &MainWindow::addFilesSimple);
+    connect(m_simpleView, &SimpleView::addFilesClicked, this, [this]() {
+        QStringList fileNames = QFileDialog::getOpenFileNames(this,
+                                                              tr("Select Files"),
+                                                              QString(),
+                                                              tr("All Files (*.*)"));
+        addFilesSimple(fileNames);
+    });
+    connect(m_simpleView, &SimpleView::removeCardClicked, this, [this](int row) {
+        if (m_procStarted && row == m_currentVideoIndex) {
+            return;
+        }
+        m_taskTableModel->removeRow(row);
+        if (row < m_currentVideoIndex) {
+            m_currentVideoIndex -= 1;
+        }
+    });
+    connect(m_simpleView, &SimpleView::choicesChanged, this, &MainWindow::refreshSimpleTasks);
+    connect(m_simpleView, &SimpleView::startClicked, this, &MainWindow::on_startPushButton_clicked);
+    connect(m_simpleView, &SimpleView::pauseClicked, this, &MainWindow::on_pausePushButton_clicked);
+    connect(m_simpleView, &SimpleView::resumeClicked, this, &MainWindow::on_resumePushButton_clicked);
+    connect(m_simpleView, &SimpleView::abortClicked, this, &MainWindow::on_abortPushButton_clicked);
+    connect(m_simpleView, &SimpleView::logsClicked, this, [this]() {
+        ui->logsDockWidget->setVisible(!ui->logsDockWidget->isVisible());
+    });
+    connect(m_simpleView, &SimpleView::aboutClicked, this, &MainWindow::on_actionAbout_triggered);
+    connect(m_simpleView, &SimpleView::advancedClicked, this, [this]() {
+        // The advanced settings are the defaults the simple choices build on
+        TaskConfigDialog dialog(this);
+        dialog.setWindowTitle(tr("Advanced settings"));
+        if (dialog.exec() == QDialog::Accepted) {
+            refreshSimpleTasks();
+        }
+    });
+
+    // Keep the cards in step with the task table
+    connect(m_taskTableModel, &QStandardItemModel::rowsRemoved, this, [this](const QModelIndex &, int first, int last) {
+        for (int row = last; row >= first; --row) {
+            m_simpleView->removeCard(row);
+        }
+    });
+}
+
+bool MainWindow::buildSimpleTask(const QString &fileName, TaskConfig &taskConfig, QString &sizesText)
+{
+    TaskConfigDialog dialog(this);
+    dialog.applySimpleChoices(m_simpleView->target4k(),
+                              m_simpleView->speed(),
+                              m_simpleView->denoise(),
+                              m_simpleView->cartoon());
+
+    // Pictures are saved as PNG
+    if (isImageFile(fileName)) {
+        dialog.setOutputSuffix(".png");
+        dialog.setOutputCodec("png");
+    }
+
+    std::optional<TaskConfig> taskOpt = dialog.getTaskConfig();
+    if (!taskOpt.has_value()) {
+        return false;
+    }
+    taskConfig = taskOpt.value();
+
+    QSize inSize, outSize;
+    if (dialog.resultSizes(fileName, inSize, outSize)) {
+        sizesText = tr("Before: %1   →   After: %2")
+                        .arg(SimpleView::describeSize(inSize), SimpleView::describeSize(outSize));
+        if (outSize.width() < inSize.width() || outSize.height() < inSize.height()) {
+            sizesText += "\n" + tr("The result is smaller than the original. Is this an already "
+                                     "upscaled video?");
+        }
+    } else {
+        sizesText = tr("Size unknown");
+    }
+    return true;
+}
+
+void MainWindow::addFilesSimple(const QStringList &fileNames)
+{
+    for (const QString &fileName : fileNames) {
+        TaskConfig taskConfig;
+        QString sizesText;
+        if (!buildSimpleTask(fileName, taskConfig, sizesText)) {
+            execErrorMessage(tr("An internal error occurred while parsing the task options."));
+            continue;
+        }
+        if (addTaskRow(fileName, taskConfig)) {
+            m_simpleView->addCard(fileName, sizesText);
+            if (m_procStarted) {
+                ui->overallProgressBar->setMaximum(ui->overallProgressBar->maximum() + 1);
+            }
+        }
+    }
+}
+
+void MainWindow::refreshSimpleTasks()
+{
+    // Apply the choices to every video that has not been processed yet
+    for (int row = 0; row < m_taskTableModel->rowCount(); ++row) {
+        if (m_procStarted && row <= m_currentVideoIndex) {
+            continue;
+        }
+        QStandardItem *item = m_taskTableModel->item(row, 0);
+        if (item == nullptr || item->data(Qt::UserRole + 2).toBool()) {
+            continue;
+        }
+        QVariant var = item->data(Qt::UserRole + 1);
+        if (!var.isValid()) {
+            continue;
+        }
+        QString fileName = pathToQString(var.value<TaskConfig>().inFname);
+
+        TaskConfig taskConfig;
+        QString sizesText;
+        if (!buildSimpleTask(fileName, taskConfig, sizesText)) {
+            continue;
+        }
+        taskConfig.inFname = var.value<TaskConfig>().inFname;
+        item->setData(QVariant::fromValue(taskConfig), Qt::UserRole + 1);
+        m_simpleView->setCardSizes(row, sizesText);
+    }
 }

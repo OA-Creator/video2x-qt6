@@ -20,6 +20,46 @@
 <context>
     <name>MainWindow</name>
     <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>based on Video2X Qt6 %1</source>
+        <translation>basiert auf Video2X Qt6 %1</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>less than 1 min. left</source>
+        <translation>noch weniger als 1 Min.</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>%1 min. left</source>
+        <translation>noch %1 Min.</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>%1 h %2 min. left</source>
+        <translation>noch %1 Std. %2 Min.</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>Advanced settings</source>
+        <translation>Erweiterte Einstellungen</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>Before: %1   →   After: %2</source>
+        <translation>Vorher: %1   →   Nachher: %2</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>The result is smaller than the original. Is this an already upscaled video?</source>
+        <translation>Das Ergebnis wird kleiner als das Original. Ist das schon ein hochskaliertes Video?</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>Size unknown</source>
+        <translation>Größe unbekannt</translation>
+    </message>
+    <message>
         <location filename="mainwindow.ui" line="29"/>
         <source>Update available! Click to open the download page.</source>
         <translation>Update verfügbar! Klicken Sie, um die Download-Seite zu öffnen.</translation>
@@ -1060,6 +1100,154 @@ Erlaubte Werte sind -1, 0, und 3</translation>
         <location filename="taskconfigdialog.cpp" line="815"/>
         <source>GLSL Files (*.glsl);;All Files (*.*)</source>
         <translation>GLSL-Dateien (*.glsl);;Alle Dateien (*.*)</translation>
+    </message>
+</context>
+<context>
+    <name>SimpleView</name>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Drag videos here or click to choose</source>
+        <translation>Videos hierher ziehen oder klicken zum Auswählen</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>No videos yet.</source>
+        <translation>Noch keine Videos.</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>How large should the video become?</source>
+        <translation>Wie groß soll das Video werden?</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Full HD</source>
+        <translation>Full HD</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>4K</source>
+        <translation>4K</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>What matters more to you?</source>
+        <translation>Was ist dir wichtiger?</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Fast</source>
+        <translation>Schnell</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Balanced</source>
+        <translation>Ausgewogen</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Best quality</source>
+        <translation>Beste Qualität</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Noise reduction?</source>
+        <translation>Rauschunterdrückung?</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Off</source>
+        <translation>Aus</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>On</source>
+        <translation>An</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Cartoon?</source>
+        <translation>Zeichentrick?</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>No</source>
+        <translation>Nein</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Yes</source>
+        <translation>Ja</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>▶  Start</source>
+        <translation>▶  Starten</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Pause</source>
+        <translation>Pause</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Resume</source>
+        <translation>Fortsetzen</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Abort</source>
+        <translation>Abbrechen</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>⚙ Advanced</source>
+        <translation>⚙ Erweitert</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>☰ Log</source>
+        <translation>☰ Protokoll</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>ⓘ About</source>
+        <translation>ⓘ Über</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Remove from the list</source>
+        <translation>Aus der Liste entfernen</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>waiting</source>
+        <translation>wartet</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>running</source>
+        <translation>läuft</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>paused</source>
+        <translation>pausiert</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>✓ Done</source>
+        <translation>✓ Fertig</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Failed</source>
+        <translation>Fehlgeschlagen</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Aborted</source>
+        <translation>Abgebrochen</translation>
     </message>
 </context>
 </TS>

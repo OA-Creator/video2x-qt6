@@ -122,15 +122,15 @@ jobs:
           }
           & $iscc dist/Video2XQt6.iss
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup fehlgeschlagen" }
-          Compress-Archive -Path dist/video2x-qt6/* -DestinationPath dist/video2x-qt6-windows-amd64-portable.zip
+          Compress-Archive -Path dist/video2x-qt6/* -DestinationPath dist/OliVision-portable.zip
 
       - name: Artefakte hochladen
         uses: actions/upload-artifact@v4
         with:
-          name: video2x-qt6-windows-amd64
+          name: OliVision
           path: |
-            dist/Output/video2x-qt6-windows-amd64-installer.exe
-            dist/video2x-qt6-windows-amd64-portable.zip
+            dist/Output/OliVision-Setup.exe
+            dist/OliVision-portable.zip
 
       - name: Release veröffentlichen
         shell: pwsh
@@ -139,7 +139,7 @@ jobs:
         run: |
           $tag = "build-${{ github.run_number }}"
           gh release create $tag `
-            dist/Output/video2x-qt6-windows-amd64-installer.exe `
-            dist/video2x-qt6-windows-amd64-portable.zip `
-            --title "Video2X Qt6 (OA-Build ${{ github.run_number }})" `
+            dist/Output/OliVision-Setup.exe `
+            dist/OliVision-portable.zip `
+            --title "OliVision (Build ${{ github.run_number }})" `
             --notes "Freie Modellwahl, AMD-Encoder-Voreinstellungen, ncnn $env:NCNN_VERSION, größere Kacheln bei viel VRAM, 3 parallele GPU-Aufträge, maximale Auflösung (Standard 4K) mit Ergebnis-Vorschau, Automatik: Grafikkarte und Encoder werden erkannt, Bitrate passend zur Auflösung, Einstellungen werden gemerkt, Drehung von Handy-Videos bleibt erhalten, Rauschunterdrückung für realesr-generalv3 wirkt, letzte Bilder werden nicht mehr verschluckt."

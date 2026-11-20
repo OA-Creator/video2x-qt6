@@ -1,12 +1,12 @@
 [Setup]
-AppName=Video2X Qt6
+AppName=OliVision
 AppVersion=6.4.0-OA
 AppId={{07D36A37-9C89-4ECD-9866-621351EB0886}
 ArchitecturesInstallIn64BitMode=x64compatible
 DefaultDirName={commonpf}\Video2X Qt6
-DefaultGroupName=Video2X Qt6
+DefaultGroupName=OliVision
 DisableProgramGroupPage=yes
-OutputBaseFilename=video2x-qt6-windows-amd64-installer
+OutputBaseFilename=OliVision-Setup
 Compression=lzma2/max
 SolidCompression=yes
 UninstallDisplayIcon={app}\video2x-qt6.exe
@@ -23,9 +23,14 @@ Name: "startmenuicon"; Description: "Create a &Start Menu shortcut"; GroupDescri
 Source: "video2x-qt6\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs
 Source: "VC_redist.x64.exe"; DestDir: "{tmp}"; Flags: dontcopy
 
+[InstallDelete]
+; Old Video2X Qt6 shortcuts, the program is called OliVision now
+Type: files; Name: "{userdesktop}\Video2X Qt6.lnk"
+Type: filesandordirs; Name: "{userprograms}\Video2X Qt6"
+
 [Icons]
-Name: "{userdesktop}\Video2X Qt6"; Filename: "{app}\video2x-qt6.exe"; Tasks: desktopicon
-Name: "{userprograms}\Video2X Qt6\Video2X Qt6"; Filename: "{app}\video2x-qt6.exe"; Tasks: startmenuicon
+Name: "{userdesktop}\OliVision"; Filename: "{app}\video2x-qt6.exe"; Tasks: desktopicon
+Name: "{userprograms}\OliVision\OliVision"; Filename: "{app}\video2x-qt6.exe"; Tasks: startmenuicon
 
 [Run]
 Filename: "{tmp}\VC_redist.x64.exe"; Parameters: "/passive /norestart"; Check: NeedsVCRuntime; Flags: waituntilterminated

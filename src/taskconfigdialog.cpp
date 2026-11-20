@@ -562,6 +562,113 @@ void TaskConfigDialog::setupMaxResolution()
     updateOutputPreview();
 }
 
+QSize TaskConfigDialog::finalSizeFor(int inWidth, int inHeight) const
+{
+    // Interpolation keeps the size
+    if (ui->processingModeSelectionComboBox->currentIndex() != FILTER_MODE) {
+        return QSize(inWidth, inHeight);
+    }
+
+    // Size produced by the selected filter
+    QSize processed;
+    int factor = ui->scalingFactorSpinBox->value();
+    if (ui->filterSelectionComboBox->currentIndex() == PLACEBO_MODE) {
+        processed = QSize(ui->outputWidthSpinBox->value(), ui->outputHeightSpinBox->value());
+    } else {
+        processed = QSize(inWidth * factor, inHeight * factor);
+    }
+
+    // Limit to the maximum resolution, the box is turned for portrait sizes
+    int finalWidth = processed.width();
+    int finalHeight = processed.height();
+    const QSize maxSize = m_maxResolutionComboBox->currentData().toSize();
+    if (maxSize.width() > 0 && maxSize.height() > 0 && finalWidth > 0 && finalHeight > 0) {
+        int maxWidth = maxSize.width();
+        int maxHeight = maxSize.height();
+        if ((finalHeight > finalWidth) != (maxHeight > maxWidth)) {
+            std::swap(maxWidth, maxHeight);
+        }
+        if (finalWidth > maxWidth || finalHeight > maxHeight) {
+            double scale = (std::min)(static_cast<double>(maxWidth) / finalWidth,
+                                      static_cast<double>(maxHeight) / finalHeight);
+            finalWidth = (std::max)(2, static_cast<int>(std::floor(finalWidth * scale / 2.0)) * 2);
+            finalHeight = (std::max)(2, static_cast<int>(std::floor(finalHeight * scale / 2.0)) * 2);
+        }
+    }
+
+    // The faster modes shrink the input so that the AI produces exactly the final size
+    int speedMode = m_speedComboBox->currentIndex();
+    bool canShrink = ui->filterSelectionComboBox->currentIndex() == ESRGAN_MODE
+                     || ui->filterSelectionComboBox->currentIndex() == CUGAN_MODE;
+    if (speedMode > 0 && canShrink && factor > 1
+        && (finalWidth != processed.width() || finalHeight != processed.height())) {
+        int idealWidth = (std::max)(2, finalWidth / factor);
+        int idealHeight = (std::max)(2, finalHeight / factor);
+        double ratio = static_cast<double>(idealWidth) / inWidth;
+        if (ratio < 1.0 && (speedMode >= 2 || ratio >= 0.7)) {
+            finalWidth = idealWidth * factor;
+            finalHeight = idealHeight * factor;
+        }
+    }
+    return QSize(finalWidth, finalHeight);
+}
+
+bool TaskConfigDialog::resultSizes(const QString &fileName, QSize &inSize, QSize &outSize) const
+{
+    int width = 0, height = 0;
+    bool rotated = false;
+    if (!probeVideoSize(fileName, width, height, rotated)) {
+        return false;
+    }
+    QSize finalSize = finalSizeFor(width, height);
+    inSize = rotated ? QSize(height, width) : QSize(width, height);
+    outSize = rotated ? finalSize.transposed() : finalSize;
+    return true;
+}
+
+QString TaskConfigDialog::selectedGpuName() const
+{
+    int index = ui->vulkanDeviceSelectionComboBox->currentIndex();
+    if (index < 0 || index >= static_cast<int>(m_gpus.size())) {
+        return QString();
+    }
+    return m_gpus[static_cast<size_t>(index)].name;
+}
+
+void TaskConfigDialog::applySimpleChoices(bool target4k, int speed, bool denoise, bool cartoon)
+{
+    // Upscaling with Real-ESRGAN, factor 4
+    ui->processingModeSelectionComboBox->setCurrentIndex(FILTER_MODE);
+    m_showAnimeCheckBox->setChecked(cartoon);
+    ui->filterSelectionComboBox->setCurrentIndex(ESRGAN_MODE);
+
+    // Model: keep a real-recording model chosen in the advanced settings
+    QString model = realesrganModelName();
+    if (cartoon) {
+        model = "realesr-animevideov3";
+    } else if (model.contains("anime")) {
+        model = "realesr-generalv3";
+    }
+    int modelIndex = ui->realesrganModelComboBox->findData(model);
+    if (modelIndex >= 0) {
+        ui->realesrganModelComboBox->setCurrentIndex(modelIndex);
+    }
+
+    ui->scalingFactorSpinBox->setValue(4);
+    if (!ui->noiseLevelSpinBox->isHidden()) {
+        ui->noiseLevelSpinBox->setValue(denoise ? 1 : 0);
+    }
+
+    int maxIndex = m_maxResolutionComboBox->findData(target4k ? QSize(3840, 2160)
+                                                                : QSize(1920, 1080));
+    if (maxIndex >= 0) {
+        m_maxResolutionComboBox->setCurrentIndex(maxIndex);
+    }
+    if (speed >= 0 && speed < m_speedComboBox->count()) {
+        m_speedComboBox->setCurrentIndex(speed);
+    }
+}
+
 void TaskConfigDialog::updateOutputPreview()
 {
     if (m_outputPreviewLabel == nullptr) {
@@ -570,15 +677,6 @@ void TaskConfigDialog::updateOutputPreview()
 
     auto sizeText = [](int w, int h) { return QString("%1 × %2").arg(w).arg(h); };
     const QSize maxSize = m_maxResolutionComboBox->currentData().toSize();
-
-    // Size produced by the selected filter for the given input size
-    auto processedSize = [this](int w, int h) {
-        if (ui->filterSelectionComboBox->currentIndex() == PLACEBO_MODE) {
-            return QSize(ui->outputWidthSpinBox->value(), ui->outputHeightSpinBox->value());
-        }
-        int factor = ui->scalingFactorSpinBox->value();
-        return QSize(w * factor, h * factor);
-    };
 
     if (m_inputWidth <= 0 || m_inputHeight <= 0) {
         QString text;
@@ -596,38 +694,9 @@ void TaskConfigDialog::updateOutputPreview()
     }
 
     // Sizes as stored in the file, the encoder keeps the rotation
-    QSize processed = processedSize(m_inputWidth, m_inputHeight);
-    int finalWidth = processed.width();
-    int finalHeight = processed.height();
-    if (maxSize.width() > 0 && maxSize.height() > 0) {
-        int maxWidth = maxSize.width();
-        int maxHeight = maxSize.height();
-        if ((finalHeight > finalWidth) != (maxHeight > maxWidth)) {
-            std::swap(maxWidth, maxHeight);
-        }
-        if (finalWidth > maxWidth || finalHeight > maxHeight) {
-            double factor = (std::min)(static_cast<double>(maxWidth) / finalWidth,
-                                     static_cast<double>(maxHeight) / finalHeight);
-            finalWidth = (std::max)(2, static_cast<int>(std::floor(finalWidth * factor / 2.0)) * 2);
-            finalHeight = (std::max)(2, static_cast<int>(std::floor(finalHeight * factor / 2.0)) * 2);
-        }
-    }
-
-    // The faster modes shrink the input so that the AI produces exactly the final size
-    int speedMode = m_speedComboBox->currentIndex();
-    int factor = ui->scalingFactorSpinBox->value();
-    bool canShrink = ui->filterSelectionComboBox->currentIndex() == ESRGAN_MODE
-                     || ui->filterSelectionComboBox->currentIndex() == CUGAN_MODE;
-    if (speedMode > 0 && canShrink && factor > 1
-        && (finalWidth != processed.width() || finalHeight != processed.height())) {
-        int idealWidth = (std::max)(2, finalWidth / factor);
-        int idealHeight = (std::max)(2, finalHeight / factor);
-        double ratio = static_cast<double>(idealWidth) / m_inputWidth;
-        if (ratio < 1.0 && (speedMode >= 2 || ratio >= 0.7)) {
-            finalWidth = idealWidth * factor;
-            finalHeight = idealHeight * factor;
-        }
-    }
+    QSize finalSize = finalSizeFor(m_inputWidth, m_inputHeight);
+    int finalWidth = finalSize.width();
+    int finalHeight = finalSize.height();
 
     // Show the sizes the way the video is displayed
     int inW = m_inputWidth, inH = m_inputHeight;

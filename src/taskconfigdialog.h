@@ -9,6 +9,7 @@
 #include <QStringList>
 #include <QList>
 #include <QMap>
+#include <QSize>
 #include <QSpinBox>
 #include <QStandardItemModel>
 
@@ -32,6 +33,16 @@ public:
     void setOutputSuffix(QString suffix);
     void setOutputCodec(QString codec);
     void setInputFiles(const QStringList &fileNames);
+
+    // Simple view: set the four choices on top of the saved advanced settings
+    // speed: 0 = best quality, 1 = balanced, 2 = fast
+    void applySimpleChoices(bool target4k, int speed, bool denoise, bool cartoon);
+
+    // Size of the file and of the result with the current settings (as displayed)
+    bool resultSizes(const QString &fileName, QSize &inSize, QSize &outSize) const;
+
+    // Name of the selected graphics card
+    QString selectedGpuName() const;
 
 private slots:
     void on_applyPushButton_clicked();
@@ -71,6 +82,7 @@ private:
     std::vector<GpuInfo> m_gpus;
     QLabel *m_hardwareInfoLabel = nullptr;
     void updateOutputPreview();
+    QSize finalSizeFor(int inWidth, int inHeight) const;
     static bool probeVideoSize(const QString &fileName, int &width, int &height, bool &rotated);
     void applyEncoderPreset(int index);
     void addCustomEncoderOption(const QString &option, const QString &value);

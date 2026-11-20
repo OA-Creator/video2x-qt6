@@ -6,12 +6,15 @@
 #include <QMainWindow>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QStackedWidget>
 #include <QStandardItemModel>
 #include <QTranslator>
 
 #include <libvideo2x/libvideo2x.h>
 
 #include "preferencesmanager.h"
+#include "simpleview.h"
+#include "taskconfig.h"
 #include "taskprocessor.h"
 #include "timer.h"
 
@@ -54,6 +57,16 @@ private:
     QPushButton *getCurrentEditButton();
     QPushButton *getCurrentDeleteButton();
     void processNextVideo();
+    bool addTaskRow(const QString &fileName, TaskConfig taskConfig);
+    static QString pathToQString(const std::filesystem::path &path);
+
+    // Simple OliVision view
+    void setupSimpleView();
+    bool buildSimpleTask(const QString &fileName, TaskConfig &taskConfig, QString &sizesText);
+    void addFilesSimple(const QStringList &fileNames);
+    void refreshSimpleTasks();
+    SimpleView *m_simpleView = nullptr;
+    QStackedWidget *m_viewStack = nullptr;
 
     Ui::MainWindow *ui;
 
