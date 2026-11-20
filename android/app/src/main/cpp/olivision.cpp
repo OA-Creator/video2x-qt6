@@ -105,7 +105,11 @@ bool runModel(std::vector<uint8_t> &rgb, int &w, int &h, int pw, int ph, int fw,
         h = ph;
     }
 
+    // ncnn reads a little past the end of the last tile, so the picture gets spare room behind it
     const int scale = g_model->scale;
+    const size_t used = static_cast<size_t>(w) * h * 3;
+    const size_t spare = static_cast<size_t>(w) * 3 * (g_model->tilesize + 2 * g_model->prepadding + 8) + (1 << 20);
+    rgb.resize(used + spare);
     ncnn::Mat in(w, h, static_cast<void *>(rgb.data()), static_cast<size_t>(3), 3);
     ncnn::Mat out(w * scale, h * scale, static_cast<size_t>(3), 3);
     if (g_model->process(in, out) != 0) {
