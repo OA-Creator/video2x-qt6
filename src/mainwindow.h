@@ -66,6 +66,8 @@ private:
     void addFilesSimple(const QStringList &fileNames);
     void refreshSimpleTasks();
     SimpleView *m_simpleView = nullptr;
+    QString m_currentOutputPath;
+    int m_lastTotalFrames = 0;
     QStackedWidget *m_viewStack = nullptr;
 
     Ui::MainWindow *ui;

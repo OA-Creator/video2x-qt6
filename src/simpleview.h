@@ -22,7 +22,8 @@ public:
     explicit SimpleView(QWidget *parent = nullptr);
 
     // The four choices
-    bool target4k() const;
+    // Size: 0 = keep (only improve), 1 = Full HD, 2 = QHD, 3 = 4K
+    int targetSize() const;
     int speed() const; // 0 = best quality, 1 = balanced, 2 = fast
     bool denoise() const;
     bool cartoon() const;
@@ -32,6 +33,7 @@ public:
     void addCard(const QString &fileName, const QString &sizesText);
     void removeCard(int row);
     void setCardSizes(int row, const QString &sizesText);
+    void setCardOutput(int row, const QString &outputPath, const QString &sizeText);
     void setCardState(int row, CardState state, const QString &detail = QString());
     void setCardProgress(int row, int processed, int total, const QString &remainingText);
     int cardCount() const;
@@ -56,10 +58,16 @@ signals:
     void advancedClicked();
     void logsClicked();
     void aboutClicked();
+    void minimizeClicked();
+    void maximizeClicked();
+    void closeClicked();
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
     void dropEvent(QDropEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
 
 private:
     struct Card
@@ -70,18 +78,25 @@ private:
         QLabel *sizesLabel = nullptr;
         QProgressBar *progressBar = nullptr;
         QPushButton *removeButton = nullptr;
+        QLabel *outputLabel = nullptr;
+        QPushButton *openFolderButton = nullptr;
+        QString outputPath;
     };
+
+    Qt::Edges edgesAt(const QPoint &pos) const;
 
     QButtonGroup *addChoice(QVBoxLayout *layout,
                             const QString &question,
                             const QStringList &options,
                             int defaultIndex,
-                            const QString &settingsKey);
+                            const QString &settingsKey,
+                            const QString &hint = QString());
     void saveChoices();
 
     QVBoxLayout *m_cardsLayout = nullptr;
     QLabel *m_emptyLabel = nullptr;
     QLabel *m_gpuLabel = nullptr;
+    QWidget *m_header = nullptr;
     QList<Card> m_cards;
 
     QButtonGroup *m_targetGroup = nullptr;

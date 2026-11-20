@@ -21,6 +21,26 @@
     <name>MainWindow</name>
     <message>
         <location filename="mainwindow.cpp" line="1"/>
+        <source>File: %1   →   approx. %2</source>
+        <translation>Datei: %1   →   ca. %2</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>Duration: approx. %1</source>
+        <translation>Dauer: ca. %1</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>Duration: is measured with the first video</source>
+        <translation>Dauer: wird beim ersten Video ermittelt</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>The video already has this size, the AI only improves the picture.</source>
+        <translation>Das Video hat schon diese Größe, die KI verbessert nur das Bild.</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
         <source>based on Video2X Qt6 %1</source>
         <translation>basiert auf Video2X Qt6 %1</translation>
     </message>
@@ -1106,6 +1126,31 @@ Erlaubte Werte sind -1, 0, und 3</translation>
     <name>SimpleView</name>
     <message>
         <location filename="simpleview.cpp" line="1"/>
+        <source>Same (only improve)</source>
+        <translation>Gleich (nur verbessern)</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>QHD</source>
+        <translation>QHD</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>On: for old or dark recordings with picture noise. The picture gets calmer, very fine details a little softer.</source>
+        <translation>An: für alte oder dunkle Aufnahmen mit Bildrauschen. Das Bild wird ruhiger, sehr feine Details etwas weicher.</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Open folder</source>
+        <translation>Ordner öffnen</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
+        <source>Saved: %1 · %2</source>
+        <translation>Gespeichert: %1 · %2</translation>
+    </message>
+    <message>
+        <location filename="simpleview.cpp" line="1"/>
         <source>Drag videos here or click to choose</source>
         <translation>Videos hierher ziehen oder klicken zum Auswählen</translation>
     </message>
@@ -1248,6 +1293,24 @@ Erlaubte Werte sind -1, 0, und 3</translation>
         <location filename="simpleview.cpp" line="1"/>
         <source>Aborted</source>
         <translation>Abgebrochen</translation>
+    </message>
+</context>
+<context>
+    <name>QObject</name>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>less than 1 min.</source>
+        <translation>unter 1 Min.</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>%1 min.</source>
+        <translation>%1 Min.</translation>
+    </message>
+    <message>
+        <location filename="mainwindow.cpp" line="1"/>
+        <source>%1 h %2 min.</source>
+        <translation>%1 Std. %2 Min.</translation>
     </message>
 </context>
 </TS>

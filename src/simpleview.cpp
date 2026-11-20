@@ -2,7 +2,13 @@
 
 #include <algorithm>
 
+#include <QDesktopServices>
+#include <QDir>
 #include <QDragEnterEvent>
+#include <QFontMetrics>
+#include <QMouseEvent>
+#include <QProcess>
+#include <QWindow>
 #include <QDropEvent>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -28,6 +34,7 @@ SimpleView::SimpleView(QWidget *parent)
     : QWidget(parent)
 {
     setAcceptDrops(true);
+    setMouseTracking(true);
     setObjectName("simpleView");
     setStyleSheet(QString(R"(
         #simpleView { background: %2; }
@@ -58,6 +65,14 @@ SimpleView::SimpleView(QWidget *parent)
         QProgressBar { background: %4; border: none; border-radius: 2px; max-height: 4px; }
         QProgressBar::chunk { background: %1; border-radius: 2px; }
         QScrollArea { background: transparent; border: none; }
+        QPushButton#windowButton, QPushButton#windowClose { background: transparent; color: %5;
+                     border: none; border-radius: 6px; font-size: 11pt; }
+        QPushButton#windowButton:hover { background: #1a3550; color: #e8eef4; }
+        QPushButton#windowClose:hover { background: #c42b1c; color: #ffffff; }
+        QPushButton#openFolder { background: transparent; color: %1; border: 1px solid %1;
+                     border-radius: 6px; padding: 3px 10px; font-size: 9pt; }
+        QPushButton#openFolder:hover { background: %1; color: %2; }
+        QLabel#hint { color: #8fb0cf; font-size: 9pt; }
         QScrollArea > QWidget > QWidget { background: transparent; }
     )")
                       .arg(kGreen, kNavy, kPanel, kLine, kMuted));
@@ -90,6 +105,28 @@ SimpleView::SimpleView(QWidget *parent)
     headerLayout->addWidget(title);
     headerLayout->addStretch();
     headerLayout->addWidget(m_gpuLabel);
+    headerLayout->addSpacing(12);
+
+    // Own window buttons, the window has no Windows frame
+    const QStringList windowButtonTexts = {"–", "□", "✕"};
+    for (int i = 0; i < windowButtonTexts.size(); i++) {
+        QPushButton *button = new QPushButton(windowButtonTexts[i], header);
+        button->setObjectName(i == 2 ? "windowClose" : "windowButton");
+        button->setFixedSize(34, 26);
+        button->setFocusPolicy(Qt::NoFocus);
+        headerLayout->addWidget(button);
+        if (i == 0) {
+            connect(button, &QPushButton::clicked, this, &SimpleView::minimizeClicked);
+        } else if (i == 1) {
+            connect(button, &QPushButton::clicked, this, &SimpleView::maximizeClicked);
+        } else {
+            connect(button, &QPushButton::clicked, this, &SimpleView::closeClicked);
+        }
+    }
+    m_header = header;
+    header->installEventFilter(this);
+    title->installEventFilter(this);
+    m_gpuLabel->installEventFilter(this);
     panelLayout->addWidget(header);
 
     QHBoxLayout *body = new QHBoxLayout();
@@ -139,9 +176,9 @@ SimpleView::SimpleView(QWidget *parent)
 
     m_targetGroup = addChoice(rightLayout,
                               tr("How large should the video become?"),
-                              {tr("Full HD"), tr("4K")},
-                              1,
-                              "target");
+                              {tr("Same (only improve)"), tr("Full HD"), tr("QHD"), tr("4K")},
+                              3,
+                              "targetSize");
     m_speedGroup = addChoice(rightLayout,
                              tr("What matters more to you?"),
                              {tr("Fast"), tr("Balanced"), tr("Best quality")},
@@ -151,7 +188,9 @@ SimpleView::SimpleView(QWidget *parent)
                                tr("Noise reduction?"),
                                {tr("Off"), tr("On")},
                                0,
-                               "denoise");
+                               "denoise",
+                               tr("On: for old or dark recordings with picture noise. The picture "
+                                  "gets calmer, very fine details a little softer."));
     m_cartoonGroup = addChoice(rightLayout,
                                tr("Cartoon?"),
                                {tr("No"), tr("Yes")},
@@ -207,7 +246,8 @@ QButtonGroup *SimpleView::addChoice(QVBoxLayout *layout,
                                     const QString &question,
                                     const QStringList &options,
                                     int defaultIndex,
-                                    const QString &settingsKey)
+                                    const QString &settingsKey,
+                                    const QString &hint)
 {
     QLabel *label = new QLabel(question, this);
     label->setObjectName("question");
@@ -228,6 +268,12 @@ QButtonGroup *SimpleView::addChoice(QVBoxLayout *layout,
         button->setCheckable(true);
         button->setCursor(Qt::PointingHandCursor);
         button->setChecked(i == saved);
+
+        // Wide enough for the bold text of the selected button
+        QFont boldFont = button->font();
+        boldFont.setBold(true);
+        boldFont.setPointSizeF(10);
+        button->setMinimumWidth(QFontMetrics(boldFont).horizontalAdvance(options[i]) + 30);
         group->addButton(button, i);
         row->addWidget(button);
     }
@@ -237,6 +283,12 @@ QButtonGroup *SimpleView::addChoice(QVBoxLayout *layout,
     block->setSpacing(6);
     block->addWidget(label);
     block->addLayout(row);
+    if (!hint.isEmpty()) {
+        QLabel *hintLabel = new QLabel(hint, this);
+        hintLabel->setObjectName("hint");
+        hintLabel->setWordWrap(true);
+        block->addWidget(hintLabel);
+    }
     layout->addLayout(block);
 
     connect(group, &QButtonGroup::idClicked, this, [this]() {
@@ -249,15 +301,15 @@ QButtonGroup *SimpleView::addChoice(QVBoxLayout *layout,
 void SimpleView::saveChoices()
 {
     QSettings settings = choiceSettings();
-    settings.setValue("target", m_targetGroup->checkedId());
+    settings.setValue("targetSize", m_targetGroup->checkedId());
     settings.setValue("speed", m_speedGroup->checkedId());
     settings.setValue("denoise", m_denoiseGroup->checkedId());
     settings.setValue("cartoon", m_cartoonGroup->checkedId());
 }
 
-bool SimpleView::target4k() const
+int SimpleView::targetSize() const
 {
-    return m_targetGroup->checkedId() == 1;
+    return m_targetGroup->checkedId();
 }
 
 int SimpleView::speed() const
@@ -324,6 +376,19 @@ void SimpleView::addCard(const QString &fileName, const QString &sizesText)
     card.sizesLabel->setWordWrap(true);
     layout->addWidget(card.sizesLabel);
 
+    QHBoxLayout *outputRow = new QHBoxLayout();
+    card.outputLabel = new QLabel(card.frame);
+    card.outputLabel->setObjectName("muted");
+    card.outputLabel->setStyleSheet("border: none;");
+    card.outputLabel->setVisible(false);
+    card.openFolderButton = new QPushButton(tr("Open folder"), card.frame);
+    card.openFolderButton->setObjectName("openFolder");
+    card.openFolderButton->setCursor(Qt::PointingHandCursor);
+    card.openFolderButton->setVisible(false);
+    outputRow->addWidget(card.outputLabel, 1);
+    outputRow->addWidget(card.openFolderButton);
+    layout->addLayout(outputRow);
+
     card.progressBar = new QProgressBar(card.frame);
     card.progressBar->setTextVisible(false);
     card.progressBar->setRange(0, 1);
@@ -332,6 +397,20 @@ void SimpleView::addCard(const QString &fileName, const QString &sizesText)
     layout->addWidget(card.progressBar);
 
     QFrame *frame = card.frame;
+    connect(card.openFolderButton, &QPushButton::clicked, this, [this, frame]() {
+        for (const Card &existing : m_cards) {
+            if (existing.frame == frame && !existing.outputPath.isEmpty()) {
+#ifdef _WIN32
+                QProcess::startDetached("explorer.exe",
+                                        {"/select,", QDir::toNativeSeparators(existing.outputPath)});
+#else
+                QDesktopServices::openUrl(
+                    QUrl::fromLocalFile(QFileInfo(existing.outputPath).absolutePath()));
+#endif
+                return;
+            }
+        }
+    });
     connect(card.removeButton, &QPushButton::clicked, this, [this, frame]() {
         for (int i = 0; i < m_cards.size(); i++) {
             if (m_cards[i].frame == frame) {
@@ -356,6 +435,18 @@ void SimpleView::removeCard(int row)
     m_cards[row].frame->deleteLater();
     m_cards.removeAt(row);
     m_emptyLabel->setVisible(m_cards.isEmpty());
+}
+
+void SimpleView::setCardOutput(int row, const QString &outputPath, const QString &sizeText)
+{
+    if (row < 0 || row >= m_cards.size()) {
+        return;
+    }
+    Card &card = m_cards[row];
+    card.outputPath = outputPath;
+    card.outputLabel->setText(tr("Saved: %1 · %2").arg(QFileInfo(outputPath).fileName(), sizeText));
+    card.outputLabel->setVisible(true);
+    card.openFolderButton->setVisible(true);
 }
 
 void SimpleView::setCardSizes(int row, const QString &sizesText)
@@ -485,4 +576,72 @@ void SimpleView::dropEvent(QDropEvent *event)
     if (!files.isEmpty()) {
         emit filesDropped(files);
     }
+}
+
+bool SimpleView::eventFilter(QObject *watched, QEvent *event)
+{
+    // The header works as title bar: drag to move, double click to maximize
+    if (event->type() == QEvent::MouseButtonPress) {
+        QMouseEvent *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::LeftButton && window()->windowHandle() != nullptr) {
+            window()->windowHandle()->startSystemMove();
+            return true;
+        }
+    } else if (event->type() == QEvent::MouseButtonDblClick) {
+        emit maximizeClicked();
+        return true;
+    }
+    return QWidget::eventFilter(watched, event);
+}
+
+Qt::Edges SimpleView::edgesAt(const QPoint &pos) const
+{
+    const int border = 8;
+    Qt::Edges edges;
+    if (window()->isMaximized()) {
+        return edges;
+    }
+    if (pos.x() < border) {
+        edges |= Qt::LeftEdge;
+    }
+    if (pos.x() > width() - border) {
+        edges |= Qt::RightEdge;
+    }
+    if (pos.y() < border) {
+        edges |= Qt::TopEdge;
+    }
+    if (pos.y() > height() - border) {
+        edges |= Qt::BottomEdge;
+    }
+    return edges;
+}
+
+void SimpleView::mouseMoveEvent(QMouseEvent *event)
+{
+    // Resize cursor at the window edges
+    Qt::Edges edges = edgesAt(event->position().toPoint());
+    if ((edges & Qt::LeftEdge && edges & Qt::TopEdge)
+        || (edges & Qt::RightEdge && edges & Qt::BottomEdge)) {
+        setCursor(Qt::SizeFDiagCursor);
+    } else if ((edges & Qt::RightEdge && edges & Qt::TopEdge)
+               || (edges & Qt::LeftEdge && edges & Qt::BottomEdge)) {
+        setCursor(Qt::SizeBDiagCursor);
+    } else if (edges & (Qt::LeftEdge | Qt::RightEdge)) {
+        setCursor(Qt::SizeHorCursor);
+    } else if (edges & (Qt::TopEdge | Qt::BottomEdge)) {
+        setCursor(Qt::SizeVerCursor);
+    } else {
+        unsetCursor();
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void SimpleView::mousePressEvent(QMouseEvent *event)
+{
+    Qt::Edges edges = edgesAt(event->position().toPoint());
+    if (event->button() == Qt::LeftButton && edges && window()->windowHandle() != nullptr) {
+        window()->windowHandle()->startSystemResize(edges);
+        return;
+    }
+    QWidget::mousePressEvent(event);
 }

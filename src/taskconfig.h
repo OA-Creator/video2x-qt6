@@ -17,6 +17,11 @@ struct TaskConfig
     // Number of processor instances working on frames at the same time
     int gpuWorkers = 3;
 
+    // OliVision: used to measure the speed for the duration estimate
+    qint64 olivisionAiPixels = 0;
+    QString olivisionModelKey;
+    QString olivisionDoneText;
+
     // VideoProcessor::process parameters
     std::filesystem::path inFname;
     std::filesystem::path outFname;

@@ -36,10 +36,24 @@ public:
 
     // Simple view: set the four choices on top of the saved advanced settings
     // speed: 0 = best quality, 1 = balanced, 2 = fast
-    void applySimpleChoices(bool target4k, int speed, bool denoise, bool cartoon);
+    // targetSize: 0 = keep (only improve), 1 = Full HD, 2 = QHD, 3 = 4K
+    void applySimpleChoices(int targetSize, int speed, bool denoise, bool cartoon);
 
-    // Size of the file and of the result with the current settings (as displayed)
-    bool resultSizes(const QString &fileName, QSize &inSize, QSize &outSize) const;
+    // What the current settings make of a file
+    struct ResultInfo
+    {
+        QSize inSize;        // as displayed
+        QSize outSize;       // as displayed
+        QSize aiSize;        // size the AI produces per frame
+        QSize storedSize;    // as stored in the file
+        double durationSeconds = 0.0;
+        double frameRate = 0.0;
+        qint64 frameCount = 0;
+        qint64 inBytes = 0;
+        qint64 estimatedOutBytes = 0;
+        QString modelKey;    // what the measured speed is stored under
+    };
+    bool resultInfo(const QString &fileName, ResultInfo &info) const;
 
     // Name of the selected graphics card
     QString selectedGpuName() const;
@@ -82,7 +96,8 @@ private:
     std::vector<GpuInfo> m_gpus;
     QLabel *m_hardwareInfoLabel = nullptr;
     void updateOutputPreview();
-    QSize finalSizeFor(int inWidth, int inHeight) const;
+    QSize finalSizeFor(int inWidth, int inHeight, QSize *aiSize = nullptr) const;
+    bool m_keepOriginalSize = false;
     static bool probeVideoSize(const QString &fileName, int &width, int &height, bool &rotated);
     void applyEncoderPreset(int index);
     void addCustomEncoderOption(const QString &option, const QString &value);

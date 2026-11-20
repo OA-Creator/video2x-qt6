@@ -13,6 +13,8 @@
 #include <QNetworkReply>
 #include <QThread>
 #include <QFileInfo>
+#include <QLocale>
+#include <QSettings>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QUrl>
@@ -45,6 +47,29 @@ extern "C" {
 #define PROGRESS_BAR_COLUMN 2
 #define EDIT_BUTTON_COLUMN 3
 #define DELETE_BUTTON_COLUMN 4
+
+static QString formatDuration(double seconds)
+{
+    int minutes = static_cast<int>(seconds / 60.0 + 0.5);
+    if (minutes < 1) {
+        return QObject::tr("less than 1 min.");
+    }
+    if (minutes < 60) {
+        return QObject::tr("%1 min.").arg(minutes);
+    }
+    return QObject::tr("%1 h %2 min.").arg(minutes / 60).arg(minutes % 60);
+}
+
+static QString formatBytes(qint64 bytes)
+{
+    return QLocale().formattedDataSize(bytes, 0, QLocale::DataSizeTraditionalFormat);
+}
+
+static QSettings speedSettings()
+{
+    return QSettings(QSettings::IniFormat, QSettings::UserScope, "video2x", "olivision-speed");
+}
+
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -186,6 +211,7 @@ MainWindow::MainWindow(QWidget *parent)
         ui->abortPushButton->setVisible(false);
         ui->startPushButton->setVisible(true);
         m_simpleView->setRunning(false, false);
+        refreshSimpleTasks();
 
         ui->statusbar->showMessage(tr("Status: ") + tr("idle"));
     });
@@ -923,7 +949,29 @@ void MainWindow::on_videoProcessingFinished(bool retValue, std::filesystem::path
         m_simpleView->setCardState(m_currentVideoIndex, SimpleView::CardState::Done);
         if (QStandardItem *doneItem = m_taskTableModel->item(m_currentVideoIndex, 0)) {
             doneItem->setData(true, Qt::UserRole + 2);
+
+            // Measure the speed for the duration estimate of the next videos
+            TaskConfig doneConfig = doneItem->data(Qt::UserRole + 1).value<TaskConfig>();
+            double seconds = static_cast<double>(m_timer.getElapsedTime()) / 1000.0;
+            if (seconds > 5.0 && m_lastTotalFrames > 0 && doneConfig.olivisionAiPixels > 0
+                && !doneConfig.olivisionModelKey.isEmpty()) {
+                double measured = static_cast<double>(m_lastTotalFrames)
+                                  * static_cast<double>(doneConfig.olivisionAiPixels) / seconds;
+                QSettings settings = speedSettings();
+                double previous = settings.value(doneConfig.olivisionModelKey, 0.0).toDouble();
+                settings.setValue(doneConfig.olivisionModelKey,
+                                  previous > 0 ? (previous + measured) / 2.0 : measured);
+            }
         }
+        if (QStandardItem *doneItem = m_taskTableModel->item(m_currentVideoIndex, 0)) {
+            QString doneText = doneItem->data(Qt::UserRole + 1).value<TaskConfig>().olivisionDoneText;
+            if (!doneText.isEmpty()) {
+                m_simpleView->setCardSizes(m_currentVideoIndex, doneText);
+            }
+        }
+        m_simpleView->setCardOutput(m_currentVideoIndex,
+                                    m_currentOutputPath,
+                                    formatBytes(QFileInfo(m_currentOutputPath).size()));
     }
 
     // Update the overall progress bar
@@ -967,6 +1015,8 @@ void MainWindow::on_progressUpdate(int totalFrames, int processedFrames)
                              totalFrames,
                              static_cast<float>(processedFrames) / static_cast<float>(totalFrames)
                                  * 100);
+
+    m_lastTotalFrames = totalFrames;
 
     // Get the progress bar for the current row
     QProgressBar *progressBar = getCurrentProgressBar();
@@ -1137,6 +1187,9 @@ void MainWindow::processNextVideo()
         return;
     }
 
+    m_currentOutputPath = outputFilePath.value();
+    m_lastTotalFrames = 0;
+
 #ifdef _WIN32
     taskConfig.outFname = std::filesystem::path(outputFilePath.value().toStdWString());
 #else
@@ -1187,7 +1240,19 @@ void MainWindow::setupSimpleView()
     menuBar()->hide();
     ui->toolBar->hide();
     statusBar()->hide();
-    resize(980, 640);
+    resize(1060, 680);
+
+    // No Windows frame: the OliVision header is the title bar
+    setWindowFlag(Qt::FramelessWindowHint, true);
+    connect(m_simpleView, &SimpleView::minimizeClicked, this, &QWidget::showMinimized);
+    connect(m_simpleView, &SimpleView::maximizeClicked, this, [this]() {
+        if (isMaximized()) {
+            showNormal();
+        } else {
+            showMaximized();
+        }
+    });
+    connect(m_simpleView, &SimpleView::closeClicked, this, &QWidget::close);
 
     // Show the graphics card in the header
     {
@@ -1241,7 +1306,7 @@ void MainWindow::setupSimpleView()
 bool MainWindow::buildSimpleTask(const QString &fileName, TaskConfig &taskConfig, QString &sizesText)
 {
     TaskConfigDialog dialog(this);
-    dialog.applySimpleChoices(m_simpleView->target4k(),
+    dialog.applySimpleChoices(m_simpleView->targetSize(),
                               m_simpleView->speed(),
                               m_simpleView->denoise(),
                               m_simpleView->cartoon());
@@ -1258,17 +1323,48 @@ bool MainWindow::buildSimpleTask(const QString &fileName, TaskConfig &taskConfig
     }
     taskConfig = taskOpt.value();
 
-    QSize inSize, outSize;
-    if (dialog.resultSizes(fileName, inSize, outSize)) {
-        sizesText = tr("Before: %1   →   After: %2")
-                        .arg(SimpleView::describeSize(inSize), SimpleView::describeSize(outSize));
-        if (outSize.width() < inSize.width() || outSize.height() < inSize.height()) {
-            sizesText += "\n" + tr("The result is smaller than the original. Is this an already "
-                                     "upscaled video?");
-        }
-    } else {
+    TaskConfigDialog::ResultInfo info;
+    if (!dialog.resultInfo(fileName, info)) {
         sizesText = tr("Size unknown");
+        return true;
     }
+
+    // "Only improve": the result keeps the size of this file
+    if (m_simpleView->targetSize() == 0) {
+        taskConfig.procCfg.max_width = info.storedSize.width();
+        taskConfig.procCfg.max_height = info.storedSize.height();
+    }
+
+    QStringList lines;
+    lines << tr("Before: %1   →   After: %2")
+                 .arg(SimpleView::describeSize(info.inSize), SimpleView::describeSize(info.outSize));
+
+    if (info.durationSeconds > 0) {
+        lines << tr("File: %1   →   approx. %2")
+                     .arg(formatBytes(info.inBytes), formatBytes(info.estimatedOutBytes));
+        taskConfig.olivisionDoneText = lines.join("\n");
+
+        // Duration from the speed measured on earlier videos with the same model
+        double pixelsPerSecond = speedSettings().value(info.modelKey, 0.0).toDouble();
+        double aiPixels = static_cast<double>(info.aiSize.width()) * info.aiSize.height();
+        if (pixelsPerSecond > 0 && info.frameCount > 0) {
+            lines << tr("Duration: approx. %1")
+                         .arg(formatDuration(info.frameCount * aiPixels / pixelsPerSecond));
+        } else {
+            lines << tr("Duration: is measured with the first video");
+        }
+    }
+
+    if (info.outSize.width() < info.inSize.width() || info.outSize.height() < info.inSize.height()) {
+        lines << tr("The result is smaller than the original. Is this an already upscaled video?");
+    } else if (info.outSize == info.inSize && m_simpleView->targetSize() != 0) {
+        lines << tr("The video already has this size, the AI only improves the picture.");
+    }
+    sizesText = lines.join("\n");
+
+    // Remember what is needed to measure the speed afterwards
+    taskConfig.olivisionAiPixels = static_cast<qint64>(info.aiSize.width()) * info.aiSize.height();
+    taskConfig.olivisionModelKey = info.modelKey;
     return true;
 }
 

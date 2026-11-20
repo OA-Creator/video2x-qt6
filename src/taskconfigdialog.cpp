@@ -562,8 +562,12 @@ void TaskConfigDialog::setupMaxResolution()
     updateOutputPreview();
 }
 
-QSize TaskConfigDialog::finalSizeFor(int inWidth, int inHeight) const
+QSize TaskConfigDialog::finalSizeFor(int inWidth, int inHeight, QSize *aiSize) const
 {
+    if (aiSize != nullptr) {
+        *aiSize = QSize(inWidth, inHeight);
+    }
+
     // Interpolation keeps the size
     if (ui->processingModeSelectionComboBox->currentIndex() != FILTER_MODE) {
         return QSize(inWidth, inHeight);
@@ -577,11 +581,16 @@ QSize TaskConfigDialog::finalSizeFor(int inWidth, int inHeight) const
     } else {
         processed = QSize(inWidth * factor, inHeight * factor);
     }
+    if (aiSize != nullptr) {
+        *aiSize = processed;
+    }
 
     // Limit to the maximum resolution, the box is turned for portrait sizes
     int finalWidth = processed.width();
     int finalHeight = processed.height();
-    const QSize maxSize = m_maxResolutionComboBox->currentData().toSize();
+    // "Only improve" keeps the size of the original
+    const QSize maxSize = m_keepOriginalSize ? QSize(inWidth, inHeight)
+                                             : m_maxResolutionComboBox->currentData().toSize();
     if (maxSize.width() > 0 && maxSize.height() > 0 && finalWidth > 0 && finalHeight > 0) {
         int maxWidth = maxSize.width();
         int maxHeight = maxSize.height();
@@ -608,21 +617,101 @@ QSize TaskConfigDialog::finalSizeFor(int inWidth, int inHeight) const
         if (ratio < 1.0 && (speedMode >= 2 || ratio >= 0.7)) {
             finalWidth = idealWidth * factor;
             finalHeight = idealHeight * factor;
+            if (aiSize != nullptr) {
+                *aiSize = QSize(finalWidth, finalHeight);
+            }
         }
     }
     return QSize(finalWidth, finalHeight);
 }
 
-bool TaskConfigDialog::resultSizes(const QString &fileName, QSize &inSize, QSize &outSize) const
+bool TaskConfigDialog::resultInfo(const QString &fileName, ResultInfo &info) const
 {
-    int width = 0, height = 0;
-    bool rotated = false;
-    if (!probeVideoSize(fileName, width, height, rotated)) {
+    info = ResultInfo();
+    info.inBytes = QFileInfo(fileName).size();
+
+    AVFormatContext *fmtCtx = nullptr;
+    if (avformat_open_input(&fmtCtx, fileName.toUtf8().constData(), nullptr, nullptr) < 0) {
         return false;
     }
-    QSize finalSize = finalSizeFor(width, height);
-    inSize = rotated ? QSize(height, width) : QSize(width, height);
-    outSize = rotated ? finalSize.transposed() : finalSize;
+    avformat_find_stream_info(fmtCtx, nullptr);
+
+    int width = 0, height = 0;
+    bool rotated = false;
+    bool hasAudio = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0) >= 0;
+    int streamIndex = av_find_best_stream(fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    if (streamIndex >= 0) {
+        AVStream *stream = fmtCtx->streams[streamIndex];
+        const AVCodecParameters *par = stream->codecpar;
+        width = par->width;
+        height = par->height;
+
+        const AVPacketSideData *sideData = av_packet_side_data_get(par->coded_side_data,
+                                                                   par->nb_coded_side_data,
+                                                                   AV_PKT_DATA_DISPLAYMATRIX);
+        if (sideData != nullptr && sideData->size >= 9 * static_cast<int>(sizeof(int32_t))) {
+            double rotation = av_display_rotation_get(
+                reinterpret_cast<const int32_t *>(sideData->data));
+            rotated = std::abs(std::abs(std::fmod(rotation, 180.0)) - 90.0) < 1.0;
+        }
+
+        AVRational rate = stream->avg_frame_rate.num > 0 ? stream->avg_frame_rate
+                                                         : stream->r_frame_rate;
+        info.frameRate = rate.num > 0 && rate.den > 0 ? av_q2d(rate) : 30.0;
+        if (stream->duration > 0 && stream->time_base.den > 0) {
+            info.durationSeconds = static_cast<double>(stream->duration) * av_q2d(stream->time_base);
+        } else if (fmtCtx->duration > 0) {
+            info.durationSeconds = static_cast<double>(fmtCtx->duration) / AV_TIME_BASE;
+        }
+        info.frameCount = stream->nb_frames > 0
+                              ? stream->nb_frames
+                              : static_cast<qint64>(info.durationSeconds * info.frameRate + 0.5);
+    }
+    avformat_close_input(&fmtCtx);
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+
+    // Final size and the size the AI actually produces
+    QSize finalSize = finalSizeFor(width, height, &info.aiSize);
+    info.storedSize = QSize(width, height);
+    info.inSize = rotated ? QSize(height, width) : QSize(width, height);
+    info.outSize = rotated ? finalSize.transposed() : finalSize;
+
+    // Estimated file size: video bit rate as the encoder will use it, plus audio
+    QString codec = ui->codecLineEdit->text();
+    double pixels = static_cast<double>(finalSize.width()) * finalSize.height();
+    double bitRate = ui->bitRateSpinBox->value();
+    if (bitRate <= 0) {
+        double codecFactor = 1.0;
+        if (codec.startsWith("hevc")) {
+            codecFactor = 1.3;
+        } else if (codec.startsWith("h264") || codec == "libx264") {
+            codecFactor = 2.0;
+        }
+        bitRate = 25e6 * std::pow(pixels / (3840.0 * 2160.0), 0.83) * (info.frameRate / 30.0)
+                  * codecFactor;
+    }
+    if (hasAudio && (ui->copyStreamsCheckBox->isChecked())) {
+        bitRate += 192e3;
+    }
+    info.estimatedOutBytes = static_cast<qint64>(bitRate / 8.0 * info.durationSeconds);
+
+    // Speed is measured per model
+    switch (ui->filterSelectionComboBox->currentIndex()) {
+    case ESRGAN_MODE:
+        info.modelKey = "realesrgan/" + realesrganModelName();
+        break;
+    case CUGAN_MODE:
+        info.modelKey = "realcugan/" + ui->realcuganModelComboBox->currentText();
+        break;
+    default:
+        info.modelKey = "other";
+        break;
+    }
+    if (ui->processingModeSelectionComboBox->currentIndex() != FILTER_MODE) {
+        info.modelKey = "rife/" + ui->rifeModelComboBox->currentText();
+    }
     return true;
 }
 
@@ -635,7 +724,7 @@ QString TaskConfigDialog::selectedGpuName() const
     return m_gpus[static_cast<size_t>(index)].name;
 }
 
-void TaskConfigDialog::applySimpleChoices(bool target4k, int speed, bool denoise, bool cartoon)
+void TaskConfigDialog::applySimpleChoices(int targetSize, int speed, bool denoise, bool cartoon)
 {
     // Upscaling with Real-ESRGAN, factor 4
     ui->processingModeSelectionComboBox->setCurrentIndex(FILTER_MODE);
@@ -659,10 +748,14 @@ void TaskConfigDialog::applySimpleChoices(bool target4k, int speed, bool denoise
         ui->noiseLevelSpinBox->setValue(denoise ? 1 : 0);
     }
 
-    int maxIndex = m_maxResolutionComboBox->findData(target4k ? QSize(3840, 2160)
-                                                                : QSize(1920, 1080));
-    if (maxIndex >= 0) {
-        m_maxResolutionComboBox->setCurrentIndex(maxIndex);
+    // 0 = keep the size (only improve), 1 = Full HD, 2 = QHD, 3 = 4K
+    static const QSize targets[] = {QSize(0, 0), QSize(1920, 1080), QSize(2560, 1440), QSize(3840, 2160)};
+    m_keepOriginalSize = targetSize == 0;
+    if (targetSize > 0 && targetSize < 4) {
+        int maxIndex = m_maxResolutionComboBox->findData(targets[targetSize]);
+        if (maxIndex >= 0) {
+            m_maxResolutionComboBox->setCurrentIndex(maxIndex);
+        }
     }
     if (speed >= 0 && speed < m_speedComboBox->count()) {
         m_speedComboBox->setCurrentIndex(speed);
