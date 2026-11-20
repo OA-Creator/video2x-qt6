@@ -3,6 +3,9 @@ name: Windows-Installer bauen
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - 'android/**'
+      - '.github/workflows/android-apk.yml'
   workflow_dispatch:
 
 permissions:
