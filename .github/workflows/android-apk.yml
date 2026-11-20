@@ -41,11 +41,16 @@ jobs:
           rm ncnn.zip
           ls
 
+      - name: Netz prüfen
+        run: |
+          curl -sSI https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-stdlib-jdk8/1.9.20/kotlin-stdlib-jdk8-1.9.20.pom | head -5 || true
+          curl -sSI https://maven-central.storage-download.googleapis.com/maven2/org/jetbrains/kotlin/kotlin-stdlib-jdk8/1.9.20/kotlin-stdlib-jdk8-1.9.20.pom | head -5 || true
+
       - name: APK bauen
         working-directory: android
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          gradle assembleRelease --stacktrace
+          gradle assembleRelease --stacktrace --refresh-dependencies
           cp app/build/outputs/apk/release/app-release.apk ../OliVision.apk
 
       - name: APK aufheben
