@@ -41,16 +41,20 @@ jobs:
           rm ncnn.zip
           ls
 
-      - name: Netz prüfen
+      - name: Neues NDK
         run: |
-          curl -sSI https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-stdlib-jdk8/1.9.20/kotlin-stdlib-jdk8-1.9.20.pom | head -5 || true
-          curl -sSI https://maven-central.storage-download.googleapis.com/maven2/org/jetbrains/kotlin/kotlin-stdlib-jdk8/1.9.20/kotlin-stdlib-jdk8-1.9.20.pom | head -5 || true
+          ls $ANDROID_HOME/ndk || true
+          SDKM=$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager
+          NDK=$($SDKM --list 2>/dev/null | grep -o 'ndk;[0-9.]*' | sort -t';' -k2 -V | tail -1)
+          echo "Neuestes NDK: $NDK"
+          yes | $SDKM --install "$NDK" > /dev/null
+          echo "NDK_VERSION=${NDK#ndk;}" >> $GITHUB_ENV
 
       - name: APK bauen
         working-directory: android
         run: |
           echo "sdk.dir=$ANDROID_HOME" > local.properties
-          gradle assembleRelease --stacktrace --refresh-dependencies
+          gradle assembleRelease --stacktrace
           cp app/build/outputs/apk/release/app-release.apk ../OliVision.apk
 
       - name: APK aufheben

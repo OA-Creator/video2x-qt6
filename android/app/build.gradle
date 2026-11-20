@@ -8,7 +8,7 @@ def buildNumber = (System.getenv('GITHUB_RUN_NUMBER') ?: '1') as int
 android {
     namespace 'de.oli.olivision'
     compileSdk 35
-    ndkVersion '27.2.12479018'
+    ndkVersion System.getenv('NDK_VERSION') ?: '29.0.14206865'
 
     defaultConfig {
         applicationId 'de.oli.olivision'
