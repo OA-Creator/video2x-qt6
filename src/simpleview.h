@@ -4,6 +4,7 @@
 #include <QButtonGroup>
 #include <QFrame>
 #include <QLabel>
+#include <QLineEdit>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QStringList>
@@ -31,6 +32,8 @@ public:
     // Video cards
     void clearCards();
     void addCard(const QString &fileName, const QString &sizesText);
+    // Name the result is saved under (without folder and ending), editable on the card
+    QString cardOutputName(int row) const;
     void removeCard(int row);
     void setCardSizes(int row, const QString &sizesText);
     void setCardOutput(int row, const QString &outputPath, const QString &sizeText);
@@ -43,8 +46,9 @@ public:
     // Idle, running or paused
     void setRunning(bool running, bool paused);
 
-    // Name of a resolution, e.g. "Full HD (1920 × 1080)"
-    static QString describeSize(const QSize &size);
+    // Name of a resolution, e.g. "Full HD (1920 × 1080)", "Full HD 4:3 (1440 × 1080)",
+    // photos in megapixels, e.g. "12 MP (4000 × 3000)"
+    static QString describeSize(const QSize &size, bool photo = false);
 
 signals:
     void filesDropped(const QStringList &fileNames);
@@ -80,6 +84,8 @@ private:
         QPushButton *removeButton = nullptr;
         QLabel *outputLabel = nullptr;
         QPushButton *openFolderButton = nullptr;
+        QWidget *nameRow = nullptr;
+        QLineEdit *nameEdit = nullptr;
         QString outputPath;
     };
 

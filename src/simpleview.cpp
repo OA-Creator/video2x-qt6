@@ -1,6 +1,7 @@
 #include "simpleview.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include <QDesktopServices>
 #include <QDir>
@@ -12,6 +13,8 @@
 #include <QDropEvent>
 #include <QFileInfo>
 #include <QHBoxLayout>
+#include <QLineEdit>
+#include <QMimeDatabase>
 #include <QMimeData>
 #include <QScrollArea>
 #include <QSettings>
@@ -140,7 +143,7 @@ SimpleView::SimpleView(QWidget *parent)
     leftLayout->setContentsMargins(14, 14, 14, 14);
     leftLayout->setSpacing(10);
 
-    QPushButton *dropButton = new QPushButton(tr("Drag videos here or click to choose"), left);
+    QPushButton *dropButton = new QPushButton(tr("Drag videos or photos here or click to choose"), left);
     dropButton->setObjectName("drop");
     dropButton->setCursor(Qt::PointingHandCursor);
     connect(dropButton, &QPushButton::clicked, this, &SimpleView::addFilesClicked);
@@ -152,7 +155,7 @@ SimpleView::SimpleView(QWidget *parent)
     m_cardsLayout = new QVBoxLayout(cardsWidget);
     m_cardsLayout->setContentsMargins(0, 0, 0, 0);
     m_cardsLayout->setSpacing(8);
-    m_emptyLabel = new QLabel(tr("No videos yet."), cardsWidget);
+    m_emptyLabel = new QLabel(tr("No videos or photos yet."), cardsWidget);
     m_emptyLabel->setObjectName("muted");
     m_emptyLabel->setAlignment(Qt::AlignCenter);
     m_cardsLayout->addWidget(m_emptyLabel);
@@ -175,7 +178,7 @@ SimpleView::SimpleView(QWidget *parent)
     rightLayout->setSpacing(14);
 
     m_targetGroup = addChoice(rightLayout,
-                              tr("How large should the video become?"),
+                              tr("How large should it become?"),
                               {tr("Same (only improve)"), tr("Full HD"), tr("QHD"), tr("4K")},
                               3,
                               "targetSize");
@@ -376,6 +379,39 @@ void SimpleView::addCard(const QString &fileName, const QString &sizesText)
     card.sizesLabel->setWordWrap(true);
     layout->addWidget(card.sizesLabel);
 
+    // Name of the result, can be changed before the start
+    QFileInfo inInfo(fileName);
+    bool photo = QMimeDatabase().mimeTypeForFile(fileName, QMimeDatabase::MatchContent).name().startsWith("image/");
+    QString ending = ".mkv";
+    if (photo) {
+        QString suffix = inInfo.suffix().toLower();
+        ending = (suffix == "jpg" || suffix == "jpeg") ? ".jpg" : ".png";
+    }
+    card.nameRow = new QWidget(card.frame);
+    QHBoxLayout *nameLayout = new QHBoxLayout(card.nameRow);
+    nameLayout->setContentsMargins(0, 2, 0, 2);
+    nameLayout->setSpacing(6);
+    QLabel *saveAs = new QLabel(tr("Save as:"), card.nameRow);
+    saveAs->setStyleSheet("border: none;");
+    card.nameEdit = new QLineEdit(inInfo.completeBaseName() + "_OliVision", card.nameRow);
+    card.nameEdit->setStyleSheet(QString("QLineEdit { background: %1; color: #e8eef4; border: 1px solid %2;"
+                                         " border-radius: 6px; padding: 3px 6px; }"
+                                         "QLineEdit:focus { border-color: %3; }"
+                                         "QLineEdit:disabled { color: #8fb0cf; }")
+                                     .arg(kNavy, kLine, kGreen));
+    QLabel *endingLabel = new QLabel(ending, card.nameRow);
+    endingLabel->setObjectName("muted");
+    endingLabel->setStyleSheet("border: none;");
+    QLabel *folderLabel = new QLabel(photo ? tr("in Pictures\\OliVision") : tr("in Videos\\OliVision"),
+                                     card.nameRow);
+    folderLabel->setObjectName("muted");
+    folderLabel->setStyleSheet("border: none;");
+    nameLayout->addWidget(saveAs);
+    nameLayout->addWidget(card.nameEdit, 1);
+    nameLayout->addWidget(endingLabel);
+    nameLayout->addWidget(folderLabel);
+    layout->addWidget(card.nameRow);
+
     QHBoxLayout *outputRow = new QHBoxLayout();
     card.outputLabel = new QLabel(card.frame);
     card.outputLabel->setObjectName("muted");
@@ -444,8 +480,15 @@ void SimpleView::setCardOutput(int row, const QString &outputPath, const QString
     }
     Card &card = m_cards[row];
     card.outputPath = outputPath;
-    card.outputLabel->setText(tr("Saved: %1 · %2").arg(QFileInfo(outputPath).fileName(), sizeText));
+    Q_UNUSED(sizeText);
+    QFileInfo out(outputPath);
+    QString suffix = out.suffix().toLower();
+    bool photo = suffix == "jpg" || suffix == "jpeg" || suffix == "png";
+    card.outputLabel->setText(tr("Saved: %1\\%2")
+                                  .arg(photo ? tr("Pictures\\OliVision") : tr("Videos\\OliVision"),
+                                       out.fileName()));
     card.outputLabel->setVisible(true);
+    card.nameRow->setVisible(false);
     card.openFolderButton->setVisible(true);
 }
 
@@ -500,6 +543,16 @@ void SimpleView::setCardState(int row, CardState state, const QString &detail)
     card.progressBar->setStyleSheet(
         QString("QProgressBar::chunk { background: %1; border-radius: 2px; }").arg(chunk));
     card.removeButton->setVisible(state != CardState::Running && state != CardState::Paused);
+    card.nameEdit->setEnabled(state == CardState::Waiting || state == CardState::Failed
+                              || state == CardState::Aborted);
+}
+
+QString SimpleView::cardOutputName(int row) const
+{
+    if (row < 0 || row >= m_cards.size()) {
+        return QString();
+    }
+    return m_cards[row].nameEdit->text().trimmed();
 }
 
 void SimpleView::setCardProgress(int row, int processed, int total, const QString &remainingText)
@@ -539,10 +592,18 @@ void SimpleView::setRunning(bool running, bool paused)
     }
 }
 
-QString SimpleView::describeSize(const QSize &size)
+QString SimpleView::describeSize(const QSize &size, bool photo)
 {
+    if (photo) {
+        double megapixels = static_cast<double>(size.width()) * size.height() / 1e6;
+        QString mp = megapixels < 10 ? QString::number(megapixels, 'f', 1).replace('.', ',')
+                                     : QString::number(qRound(megapixels));
+        return QString("%1 MP (%2 × %3)").arg(mp).arg(size.width()).arg(size.height());
+    }
+
     // Name by the shorter side so that portrait videos get the same names
     int shortSide = (std::min)(size.width(), size.height());
+    int longSide = (std::max)(size.width(), size.height());
     QString name;
     if (shortSide >= 2000) {
         name = "4K";
@@ -554,6 +615,20 @@ QString SimpleView::describeSize(const QSize &size)
         name = "HD";
     } else {
         name = "SD";
+    }
+
+    // Narrower than widescreen: say so, otherwise 1440 × 1080 looks wrong next to "Full HD"
+    if (shortSide > 0) {
+        double ratio = static_cast<double>(longSide) / shortSide;
+        if (std::abs(ratio - 4.0 / 3.0) < 0.04) {
+            name += " 4:3";
+        } else if (std::abs(ratio - 3.0 / 2.0) < 0.03) {
+            name += " 3:2";
+        } else if (std::abs(ratio - 1.0) < 0.03) {
+            name += " 1:1";
+        } else if (ratio < 16.0 / 9.0 - 0.05) {
+            name += " " + tr("narrow");
+        }
     }
     return QString("%1 (%2 × %3)").arg(name).arg(size.width()).arg(size.height());
 }

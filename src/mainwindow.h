@@ -67,6 +67,9 @@ private:
     void refreshSimpleTasks();
     SimpleView *m_simpleView = nullptr;
     QString m_currentOutputPath;
+    // Photos: the AI writes a PNG first, it becomes the chosen file afterwards
+    QString m_currentPhotoTempOutput;
+    QString m_currentPhotoTempInput;
     int m_lastTotalFrames = 0;
     QStackedWidget *m_viewStack = nullptr;
 

@@ -32,7 +32,7 @@
     <message>
         <location filename="mainwindow.cpp" line="1"/>
         <source>Duration: is measured with the first video</source>
-        <translation>Dauer: wird beim ersten Video ermittelt</translation>
+        <translation>Dauer: wird beim ersten Mal ermittelt</translation>
     </message>
     <message>
         <location filename="mainwindow.cpp" line="1"/>
@@ -456,6 +456,10 @@ Dies kann dazu führen, dass die Software nicht ordnungsgemäß funktioniert. Bi
         <location filename="mainwindow.cpp" line="1047"/>
         <source>Failed to generate output file name for file: </source>
         <translation>Der Ausgabedateiname für die Datei konnte nicht generiert werden: </translation>
+    </message>
+    <message>
+        <source>File: %1   →   %2</source>
+        <translation>Datei: %1   →   %2</translation>
     </message>
 </context>
 <context>
@@ -1151,18 +1155,18 @@ Erlaubte Werte sind -1, 0, und 3</translation>
     </message>
     <message>
         <location filename="simpleview.cpp" line="1"/>
-        <source>Drag videos here or click to choose</source>
-        <translation>Videos hierher ziehen oder klicken zum Auswählen</translation>
+        <source>Drag videos or photos here or click to choose</source>
+        <translation>Videos oder Fotos hierher ziehen oder klicken zum Auswählen</translation>
     </message>
     <message>
         <location filename="simpleview.cpp" line="1"/>
-        <source>No videos yet.</source>
-        <translation>Noch keine Videos.</translation>
+        <source>No videos or photos yet.</source>
+        <translation>Noch keine Videos oder Fotos.</translation>
     </message>
     <message>
         <location filename="simpleview.cpp" line="1"/>
-        <source>How large should the video become?</source>
-        <translation>Wie groß soll das Video werden?</translation>
+        <source>How large should it become?</source>
+        <translation>Wie groß soll es werden?</translation>
     </message>
     <message>
         <location filename="simpleview.cpp" line="1"/>
@@ -1293,6 +1297,34 @@ Erlaubte Werte sind -1, 0, und 3</translation>
         <location filename="simpleview.cpp" line="1"/>
         <source>Aborted</source>
         <translation>Abgebrochen</translation>
+    </message>
+    <message>
+        <source>Save as:</source>
+        <translation>Speichern als:</translation>
+    </message>
+    <message>
+        <source>in Pictures\OliVision</source>
+        <translation>in Bilder\OliVision</translation>
+    </message>
+    <message>
+        <source>in Videos\OliVision</source>
+        <translation>in Videos\OliVision</translation>
+    </message>
+    <message>
+        <source>Saved: %1\%2</source>
+        <translation>Gespeichert: %1\%2</translation>
+    </message>
+    <message>
+        <source>Pictures\OliVision</source>
+        <translation>Bilder\OliVision</translation>
+    </message>
+    <message>
+        <source>Videos\OliVision</source>
+        <translation>Videos\OliVision</translation>
+    </message>
+    <message>
+        <source>narrow</source>
+        <translation>schmal</translation>
     </message>
 </context>
 <context>

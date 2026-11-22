@@ -12,7 +12,13 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QThread>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QImage>
+#include <QImageReader>
+#include <QStandardPaths>
 #include <QLocale>
 #include <QSettings>
 #include <QStackedWidget>
@@ -68,6 +74,45 @@ static QString formatBytes(qint64 bytes)
 static QSettings speedSettings()
 {
     return QSettings(QSettings::IniFormat, QSettings::UserScope, "video2x", "olivision-speed");
+}
+
+// Photos taken with the phone turned are stored sideways and only marked as turned
+static bool photoIsTurnedSideways(const QString &fileName)
+{
+    QImageReader reader(fileName);
+    QImageIOHandler::Transformations t = reader.transformation();
+    return t.testFlag(QImageIOHandler::TransformationRotate90);
+}
+
+// Results go to Videos\OliVision or Pictures\OliVision under the name from the card
+static QString olivisionOutputPath(const QString &inputFileName, const QString &wantedName, bool photo)
+{
+    QString base = wantedName;
+    static const QString forbidden = "\\/:*?\"<>|";
+    for (QChar c : forbidden) {
+        base.remove(c);
+    }
+    base = base.trimmed();
+    if (base.isEmpty()) {
+        base = QFileInfo(inputFileName).completeBaseName() + "_OliVision";
+    }
+
+    QString ending = ".mkv";
+    if (photo) {
+        QString suffix = QFileInfo(inputFileName).suffix().toLower();
+        ending = (suffix == "jpg" || suffix == "jpeg") ? ".jpg" : ".png";
+    }
+
+    QString folder = QStandardPaths::writableLocation(photo ? QStandardPaths::PicturesLocation
+                                                            : QStandardPaths::MoviesLocation)
+                     + "/OliVision";
+    QDir().mkpath(folder);
+
+    QString path = folder + "/" + base + ending;
+    for (int n = 2; QFileInfo::exists(path); ++n) {
+        path = folder + "/" + base + QString(" (%1)").arg(n) + ending;
+    }
+    return path;
 }
 
 
@@ -940,6 +985,32 @@ void MainWindow::on_videoProcessingFinished(bool retValue, std::filesystem::path
     getCurrentEditButton()->setEnabled(true);
     getCurrentDeleteButton()->setEnabled(true);
 
+    // Photos: turn the PNG of the AI into the chosen file (JPEG stays JPEG)
+    if (!m_procAborted && retValue == 0 && !m_currentPhotoTempOutput.isEmpty()) {
+        bool saved = false;
+        if (m_currentOutputPath.endsWith(".jpg", Qt::CaseInsensitive)) {
+            QImage image(m_currentPhotoTempOutput);
+            saved = !image.isNull() && image.save(m_currentOutputPath, "JPG", 95);
+        } else {
+            saved = QFile::copy(m_currentPhotoTempOutput, m_currentOutputPath);
+        }
+        if (!saved) {
+            retValue = true;
+        }
+    }
+    if (!m_currentPhotoTempOutput.isEmpty()) {
+        QFile::remove(m_currentPhotoTempOutput);
+    }
+    if (!m_currentPhotoTempInput.isEmpty()) {
+        QFile::remove(m_currentPhotoTempInput);
+    }
+
+    // An unfinished video can not be played, so it is not left behind
+    if ((m_procAborted || retValue != 0) && m_currentPhotoTempOutput.isEmpty()
+        && !m_currentOutputPath.isEmpty()) {
+        QFile::remove(m_currentOutputPath);
+    }
+
     // Show the result on the card and remember finished videos so they are not processed again
     if (m_procAborted) {
         m_simpleView->setCardState(m_currentVideoIndex, SimpleView::CardState::Aborted);
@@ -953,9 +1024,10 @@ void MainWindow::on_videoProcessingFinished(bool retValue, std::filesystem::path
             // Measure the speed for the duration estimate of the next videos
             TaskConfig doneConfig = doneItem->data(Qt::UserRole + 1).value<TaskConfig>();
             double seconds = static_cast<double>(m_timer.getElapsedTime()) / 1000.0;
-            if (seconds > 5.0 && m_lastTotalFrames > 0 && doneConfig.olivisionAiPixels > 0
+            int frames = m_lastTotalFrames > 0 ? m_lastTotalFrames : (doneConfig.olivisionPhoto ? 1 : 0);
+            if (seconds > (doneConfig.olivisionPhoto ? 0.5 : 5.0) && frames > 0 && doneConfig.olivisionAiPixels > 0
                 && !doneConfig.olivisionModelKey.isEmpty()) {
-                double measured = static_cast<double>(m_lastTotalFrames)
+                double measured = static_cast<double>(frames)
                                   * static_cast<double>(doneConfig.olivisionAiPixels) / seconds;
                 QSettings settings = speedSettings();
                 double previous = settings.value(doneConfig.olivisionModelKey, 0.0).toDouble();
@@ -964,8 +1036,13 @@ void MainWindow::on_videoProcessingFinished(bool retValue, std::filesystem::path
             }
         }
         if (QStandardItem *doneItem = m_taskTableModel->item(m_currentVideoIndex, 0)) {
-            QString doneText = doneItem->data(Qt::UserRole + 1).value<TaskConfig>().olivisionDoneText;
-            if (!doneText.isEmpty()) {
+            TaskConfig doneConfig = doneItem->data(Qt::UserRole + 1).value<TaskConfig>();
+            if (!doneConfig.olivisionDoneText.isEmpty()) {
+                // Only real numbers now, no estimate any more
+                QString doneText = doneConfig.olivisionDoneText + "\n"
+                                   + tr("File: %1   →   %2")
+                                         .arg(formatBytes(doneConfig.olivisionInBytes),
+                                              formatBytes(QFileInfo(m_currentOutputPath).size()));
                 m_simpleView->setCardSizes(m_currentVideoIndex, doneText);
             }
         }
@@ -1178,17 +1255,37 @@ void MainWindow::processNextVideo()
 #endif
     ui->statusbar->showMessage(tr("Status: ") + tr("Processing file ") + inputFileName);
 
-    // Set the outFname
-    std::optional<QString> outputFilePath = generateNewFileName(inputFileName,
-                                                                taskConfig.procCfg.processor_type,
-                                                                taskConfig.outputSuffix);
-    if (!outputFilePath.has_value()) {
-        execErrorMessage(tr("Failed to generate output file name for file: ") + inputFileName);
-        return;
-    }
-
+    // Set the outFname: Videos\OliVision or Pictures\OliVision with the name from the card
+    std::optional<QString> outputFilePath = olivisionOutputPath(inputFileName,
+                                                                m_simpleView->cardOutputName(m_currentVideoIndex),
+                                                                taskConfig.olivisionPhoto);
     m_currentOutputPath = outputFilePath.value();
+    m_currentPhotoTempOutput.clear();
+    m_currentPhotoTempInput.clear();
     m_lastTotalFrames = 0;
+
+    if (taskConfig.olivisionPhoto) {
+        // The AI always writes a PNG, it is turned into the chosen file when done
+        QString stamp = QString::number(QDateTime::currentMSecsSinceEpoch());
+        m_currentPhotoTempOutput = QDir::tempPath() + "/olivision_" + stamp + "_out.png";
+        outputFilePath = m_currentPhotoTempOutput;
+
+        // Turned phone photos: give the AI an upright copy
+        if (QImageReader(inputFileName).transformation() != QImageIOHandler::TransformationNone) {
+            QImageReader reader(inputFileName);
+            reader.setAutoTransform(true);
+            QImage upright = reader.read();
+            QString tempInput = QDir::tempPath() + "/olivision_" + stamp + "_in.png";
+            if (!upright.isNull() && upright.save(tempInput, "PNG", 0)) {
+                m_currentPhotoTempInput = tempInput;
+#ifdef _WIN32
+                taskConfig.inFname = std::filesystem::path(tempInput.toStdWString());
+#else
+                taskConfig.inFname = std::filesystem::path(tempInput.toStdString());
+#endif
+            }
+        }
+    }
 
 #ifdef _WIN32
     taskConfig.outFname = std::filesystem::path(outputFilePath.value().toStdWString());
@@ -1311,8 +1408,9 @@ bool MainWindow::buildSimpleTask(const QString &fileName, TaskConfig &taskConfig
                               m_simpleView->denoise(),
                               m_simpleView->cartoon());
 
-    // Pictures are saved as PNG
-    if (isImageFile(fileName)) {
+    // Pictures: the AI writes PNG, the result keeps the format of the photo
+    bool photo = isImageFile(fileName);
+    if (photo) {
         dialog.setOutputSuffix(".png");
         dialog.setOutputCodec("png");
     }
@@ -1322,11 +1420,19 @@ bool MainWindow::buildSimpleTask(const QString &fileName, TaskConfig &taskConfig
         return false;
     }
     taskConfig = taskOpt.value();
+    taskConfig.olivisionPhoto = photo;
 
     TaskConfigDialog::ResultInfo info;
     if (!dialog.resultInfo(fileName, info)) {
         sizesText = tr("Size unknown");
         return true;
+    }
+    taskConfig.olivisionInBytes = info.inBytes;
+
+    // Turned phone photos are shown upright
+    if (photo && photoIsTurnedSideways(fileName)) {
+        info.inSize.transpose();
+        info.outSize.transpose();
     }
 
     // "Only improve": the result keeps the size of this file
@@ -1337,14 +1443,24 @@ bool MainWindow::buildSimpleTask(const QString &fileName, TaskConfig &taskConfig
 
     QStringList lines;
     lines << tr("Before: %1   →   After: %2")
-                 .arg(SimpleView::describeSize(info.inSize), SimpleView::describeSize(info.outSize));
+                 .arg(SimpleView::describeSize(info.inSize, photo),
+                      SimpleView::describeSize(info.outSize, photo));
+    taskConfig.olivisionDoneText = lines.first();
 
-    if (info.durationSeconds > 0) {
+    if (photo) {
+        // JPEG with quality 95 needs about half a byte per pixel, PNG about two
+        bool jpeg = fileName.endsWith(".jpg", Qt::CaseInsensitive)
+                    || fileName.endsWith(".jpeg", Qt::CaseInsensitive);
+        double outPixels = static_cast<double>(info.outSize.width()) * info.outSize.height();
+        info.estimatedOutBytes = static_cast<qint64>(outPixels * (jpeg ? 0.45 : 2.0));
+        info.frameCount = 1;
+    }
+
+    if (photo || info.durationSeconds > 0) {
         lines << tr("File: %1   →   approx. %2")
                      .arg(formatBytes(info.inBytes), formatBytes(info.estimatedOutBytes));
-        taskConfig.olivisionDoneText = lines.join("\n");
 
-        // Duration from the speed measured on earlier videos with the same model
+        // Duration from the speed measured earlier with the same model
         double pixelsPerSecond = speedSettings().value(info.modelKey, 0.0).toDouble();
         double aiPixels = static_cast<double>(info.aiSize.width()) * info.aiSize.height();
         if (pixelsPerSecond > 0 && info.frameCount > 0) {

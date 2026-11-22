@@ -20,7 +20,9 @@ struct TaskConfig
     // OliVision: used to measure the speed for the duration estimate
     qint64 olivisionAiPixels = 0;
     QString olivisionModelKey;
-    QString olivisionDoneText;
+    QString olivisionDoneText;     // "Before → After" line, the real file size is added when done
+    qint64 olivisionInBytes = 0;
+    bool olivisionPhoto = false;
 
     // VideoProcessor::process parameters
     std::filesystem::path inFname;
